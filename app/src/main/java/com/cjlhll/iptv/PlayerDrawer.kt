@@ -1,12 +1,18 @@
 package com.cjlhll.iptv
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +39,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.Key
@@ -40,17 +48,20 @@ import androidx.compose.ui.input.key.key
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 enum class DrawerColumn {
     Groups,
     Channels,
-    Programs
+    Programs,
+    Dates
 }
 
 private data class ProgramWindow(
@@ -59,6 +70,7 @@ private data class ProgramWindow(
 )
 
 private val epgTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val epgDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")
 
 @Composable
 fun PlayerDrawer(
@@ -76,19 +88,37 @@ fun PlayerDrawer(
     modifier: Modifier = Modifier
 ) {
     val container = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
-    val scrim = MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f)
+    val scrim = Color.Transparent
     val shape = RoundedCornerShape(topEnd = 18.dp, bottomEnd = 18.dp)
 
+    var showGroups by remember { mutableStateOf(false) }
+    var showDates by remember { mutableStateOf(false) }
+
+    val selectedGroupRequester = remember { FocusRequester() }
     val selectedChannelRequester = remember { FocusRequester() }
     val selectedProgramRequester = remember { FocusRequester() }
+    val selectedDateRequester = remember { FocusRequester() }
     var activeColumn by remember { mutableStateOf(DrawerColumn.Channels) }
+    var pendingFocusToGroups by remember { mutableStateOf(false) }
     var pendingFocusToChannels by remember { mutableStateOf(false) }
     var pendingFocusToPrograms by remember { mutableStateOf(false) }
+    var pendingFocusToDates by remember { mutableStateOf(false) }
 
     var focusedChannelUrl by remember { mutableStateOf<String?>(null) }
 
+    val groupListState = rememberLazyListState()
     val channelListState = rememberLazyListState()
     val programListState = rememberLazyListState()
+    val dateListState = rememberLazyListState()
+
+    val groupFocusTargetIndex = remember(groups, selectedGroup) {
+        val i = groups.indexOf(selectedGroup)
+        if (i >= 0) i else 0
+    }
+
+    val groupFocusTargetName = remember(groups, groupFocusTargetIndex) {
+        groups.getOrNull(groupFocusTargetIndex)
+    }
 
     val focusTargetIndex = remember(channels, selectedChannelUrl, focusedChannelUrl) {
         val url = focusedChannelUrl ?: selectedChannelUrl
@@ -106,9 +136,40 @@ fun PlayerDrawer(
 
     LaunchedEffect(visible) {
         if (visible) {
+            showGroups = false
+            showDates = false
             pendingFocusToChannels = true
             focusedChannelUrl = selectedChannelUrl ?: channels.firstOrNull()?.url
         }
+    }
+
+    LaunchedEffect(pendingFocusToGroups, visible, groupFocusTargetName, groupFocusTargetIndex) {
+        if (!pendingFocusToGroups) return@LaunchedEffect
+        if (!visible) return@LaunchedEffect
+        if (!showGroups) {
+            pendingFocusToGroups = false
+            return@LaunchedEffect
+        }
+        if (groupFocusTargetName == null) {
+            pendingFocusToGroups = false
+            return@LaunchedEffect
+        }
+
+        withFrameNanos { }
+
+        runCatching {
+            groupListState.scrollToItem(groupFocusTargetIndex)
+        }
+
+        repeat(3) {
+            withFrameNanos { }
+            if (runCatching { selectedGroupRequester.requestFocus() }.isSuccess) {
+                pendingFocusToGroups = false
+                return@LaunchedEffect
+            }
+        }
+
+        pendingFocusToGroups = false
     }
 
     LaunchedEffect(pendingFocusToChannels, visible, focusTargetUrl, focusTargetIndex) {
@@ -141,6 +202,11 @@ fun PlayerDrawer(
         channels.firstOrNull { it.url == url } ?: channels.firstOrNull()
     }
 
+    val zone = remember { ZoneId.systemDefault() }
+    val todayDate = remember(nowMillis, zone) {
+        Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+    }
+
     val fullPrograms = remember(epgData, focusedChannel) {
         val data = epgData
         val ch = focusedChannel
@@ -149,15 +215,51 @@ fun PlayerDrawer(
         data.programsByChannelId[channelId].orEmpty()
     }
 
-    val programWindow = remember(fullPrograms, nowMillis) {
-        if (fullPrograms.isEmpty()) {
+    val epgDates = remember(fullPrograms, zone) {
+        if (fullPrograms.isEmpty()) return@remember emptyList()
+        fullPrograms
+            .asSequence()
+            .map { millisToLocalDate(it.startMillis, zone) }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+
+    var selectedEpgDate by remember { mutableStateOf<LocalDate?>(null) }
+    LaunchedEffect(epgDates, todayDate, focusedChannelUrl, visible) {
+        if (!visible) return@LaunchedEffect
+        val selected = selectedEpgDate
+        if (selected != null && epgDates.contains(selected)) return@LaunchedEffect
+        selectedEpgDate = when {
+            epgDates.contains(todayDate) -> todayDate
+            else -> epgDates.firstOrNull()
+        }
+    }
+
+    val dateFocusTargetIndex = remember(epgDates, selectedEpgDate) {
+        val d = selectedEpgDate ?: return@remember 0
+        val i = epgDates.indexOf(d)
+        if (i >= 0) i else 0
+    }
+
+    val programsBySelectedDate = remember(fullPrograms, selectedEpgDate, zone) {
+        val d = selectedEpgDate ?: return@remember emptyList()
+        fullPrograms.filter { millisToLocalDate(it.startMillis, zone) == d }
+    }
+
+    val programWindow = remember(programsBySelectedDate, nowMillis, selectedEpgDate, todayDate) {
+        if (programsBySelectedDate.isEmpty()) {
             ProgramWindow(emptyList(), 0)
         } else {
-            val nowIndex = indexOfProgramAt(fullPrograms, nowMillis)
-            val start = (nowIndex - 12).coerceAtLeast(0)
-            val end = (start + 60).coerceAtMost(fullPrograms.size)
-            val slice = fullPrograms.subList(start, end)
-            val focusIndex = (nowIndex - start).coerceIn(0, slice.lastIndex)
+            val baseIndex = if (selectedEpgDate == todayDate) {
+                indexOfProgramAt(programsBySelectedDate, nowMillis)
+            } else {
+                0
+            }
+            val start = (baseIndex - 12).coerceAtLeast(0)
+            val end = (start + 60).coerceAtMost(programsBySelectedDate.size)
+            val slice = programsBySelectedDate.subList(start, end)
+            val focusIndex = (baseIndex - start).coerceIn(0, slice.lastIndex)
             ProgramWindow(slice, focusIndex)
         }
     }
@@ -172,9 +274,7 @@ fun PlayerDrawer(
 
         withFrameNanos { }
 
-        runCatching {
-            programListState.scrollToItem(programWindow.focusIndex)
-        }
+        centerLazyListItem(programListState, programWindow.focusIndex)
 
         repeat(3) {
             withFrameNanos { }
@@ -185,6 +285,42 @@ fun PlayerDrawer(
         }
 
         pendingFocusToPrograms = false
+    }
+
+    LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate) {
+        if (!visible) return@LaunchedEffect
+        if (programWindow.programs.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        centerLazyListItem(programListState, programWindow.focusIndex)
+    }
+
+    LaunchedEffect(pendingFocusToDates, visible, epgDates.size, dateFocusTargetIndex) {
+        if (!pendingFocusToDates) return@LaunchedEffect
+        if (!visible) return@LaunchedEffect
+        if (!showDates) {
+            pendingFocusToDates = false
+            return@LaunchedEffect
+        }
+        if (epgDates.isEmpty()) {
+            pendingFocusToDates = false
+            return@LaunchedEffect
+        }
+
+        withFrameNanos { }
+
+        runCatching {
+            dateListState.scrollToItem(dateFocusTargetIndex)
+        }
+
+        repeat(3) {
+            withFrameNanos { }
+            if (runCatching { selectedDateRequester.requestFocus() }.isSuccess) {
+                pendingFocusToDates = false
+                return@LaunchedEffect
+            }
+        }
+
+        pendingFocusToDates = false
     }
 
     AnimatedVisibility(
@@ -201,14 +337,25 @@ fun PlayerDrawer(
                     if (it.key == Key.Back) {
                         onClose()
                         true
+                    } else if (it.key == Key.DirectionLeft && activeColumn == DrawerColumn.Channels) {
+                        if (!showGroups) showGroups = true
+                        pendingFocusToGroups = true
+                        true
                     } else if (it.key == Key.DirectionRight && activeColumn == DrawerColumn.Groups) {
                         pendingFocusToChannels = true
                         true
                     } else if (it.key == Key.DirectionRight && activeColumn == DrawerColumn.Channels) {
                         pendingFocusToPrograms = true
                         true
+                    } else if (it.key == Key.DirectionRight && activeColumn == DrawerColumn.Programs) {
+                        if (!showDates) showDates = true
+                        pendingFocusToDates = true
+                        true
                     } else if (it.key == Key.DirectionLeft && activeColumn == DrawerColumn.Programs) {
                         pendingFocusToChannels = true
+                        true
+                    } else if (it.key == Key.DirectionLeft && activeColumn == DrawerColumn.Dates) {
+                        pendingFocusToPrograms = true
                         true
                     } else {
                         false
@@ -218,42 +365,66 @@ fun PlayerDrawer(
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(0.78f)
+                    .width(
+                        animateDpAsState(
+                            targetValue =
+                                (if (showGroups) (150.dp + 32.dp + 1.dp) else 0.dp) +
+                                (200.dp + 32.dp + 1.dp) +
+                                ((if (showDates && epgDates.isNotEmpty()) 440.dp else 300.dp) + 32.dp),
+                            animationSpec = tween(180),
+                            label = "drawerWidth"
+                        ).value
+                    )
                     .background(container, shape)
                     .padding(0.dp)
             ) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    DrawerColumnPanel(
-                        title = "分组",
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(200.dp)
-                            .padding(16.dp),
+                Row(modifier = Modifier.fillMaxHeight()) {
+                    AnimatedVisibility(
+                        visible = showGroups,
+                        enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { -it }) + fadeIn(tween(120)),
+                        exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { -it }) + fadeOut(tween(100)),
                     ) {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(groups, key = { it }) { g ->
-                                DrawerGroupItem(
-                                    name = g,
-                                    selected = g == selectedGroup,
-                                    onFocused = { activeColumn = DrawerColumn.Groups },
-                                    onClick = { onSelectGroup(g) }
-                                )
+                        Row(modifier = Modifier.fillMaxHeight()) {
+                            DrawerColumnPanel(
+                                title = "分组",
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(150.dp)
+                                    .padding(16.dp),
+                            ) {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    state = groupListState
+                                ) {
+                                    items(groups, key = { it }) { g ->
+                                        DrawerGroupItem(
+                                            name = g,
+                                            selected = g == selectedGroup,
+                                            focusRequester = if (g == groupFocusTargetName) selectedGroupRequester else null,
+                                            onFocused = {
+                                                activeColumn = DrawerColumn.Groups
+                                                showDates = false
+                                            },
+                                            onClick = { onSelectGroup(g) }
+                                        )
+                                    }
+                                }
                             }
+
+                            Spacer(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(1.dp)
+                                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
+                            )
                         }
                     }
-
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .width(1.dp)
-                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
-                    )
 
                     DrawerColumnPanel(
                         title = "频道",
                         modifier = Modifier
                             .fillMaxHeight()
-                            .weight(1f)
+                            .width(300.dp)
                             .padding(16.dp),
                     ) {
                         LazyColumn(
@@ -270,6 +441,8 @@ fun PlayerDrawer(
                                     onFocused = {
                                         activeColumn = DrawerColumn.Channels
                                         focusedChannelUrl = ch.url
+                                        showDates = false
+                                        showGroups = false
                                     },
                                     onClick = { onSelectChannel(ch) }
                                 )
@@ -288,38 +461,88 @@ fun PlayerDrawer(
                         title = "节目单",
                         modifier = Modifier
                             .fillMaxHeight()
-                            .width(360.dp)
+                            .width(if (showDates && epgDates.isNotEmpty()) 440.dp else 300.dp)
                             .padding(16.dp),
                     ) {
                         val programs = programWindow.programs
-                        if (programs.isEmpty()) {
-                            Text(
-                                text = "暂无节目单",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                state = programListState
-                            ) {
-                                itemsIndexed(
-                                    items = programs,
-                                    key = { _, p -> "${p.channelId}:${p.startMillis}:${p.endMillis}:${p.title}" }
-                                ) { index, p ->
-                                    val timeText = formatEpgTimeRange(p.startMillis, p.endMillis)
-                                    val state = when {
-                                        p.endMillis <= nowMillis -> ProgramTimeState.Past
-                                        p.startMillis <= nowMillis && nowMillis < p.endMillis -> ProgramTimeState.Now
-                                        else -> ProgramTimeState.Future
-                                    }
-                                    DrawerProgramItem(
-                                        time = timeText,
-                                        title = p.title,
-                                        timeState = state,
-                                        focusRequester = if (index == programWindow.focusIndex) selectedProgramRequester else null,
-                                        onFocused = { activeColumn = DrawerColumn.Programs }
+                        val dates = epgDates
+                        val selectedDate = selectedEpgDate
+
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            if (programs.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f, fill = true)
+                                        .fillMaxHeight(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "暂无节目单",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                     )
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .weight(1f, fill = true)
+                                        .fillMaxHeight(),
+                                    state = programListState
+                                ) {
+                                    itemsIndexed(
+                                        items = programs,
+                                        key = { _, p -> "${p.channelId}:${p.startMillis}:${p.endMillis}:${p.title}" }
+                                    ) { index, p ->
+                                        val timeText = formatEpgTimeRange(p.startMillis, p.endMillis)
+                                        val state = when {
+                                            p.endMillis <= nowMillis -> ProgramTimeState.Past
+                                            p.startMillis <= nowMillis && nowMillis < p.endMillis -> ProgramTimeState.Now
+                                            else -> ProgramTimeState.Future
+                                        }
+                                        DrawerProgramItem(
+                                            time = timeText,
+                                            title = p.title,
+                                            timeState = state,
+                                            focusRequester = if (index == programWindow.focusIndex) selectedProgramRequester else null,
+                                            onFocused = {
+                                                activeColumn = DrawerColumn.Programs
+                                                showDates = true
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(
+                                visible = showDates && dates.isNotEmpty(),
+                                enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { it }) + fadeIn(tween(120)),
+                                exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { it }) + fadeOut(tween(100)),
+                            ) {
+                                Row(modifier = Modifier.fillMaxHeight()) {
+                                    Spacer(modifier = Modifier.width(10.dp))
+
+                                    LazyColumn(
+                                        modifier = Modifier
+                                            .width(110.dp)
+                                            .fillMaxHeight(),
+                                        state = dateListState
+                                    ) {
+                                        itemsIndexed(
+                                            items = dates,
+                                            key = { _, d -> d.toString() }
+                                        ) { index, d ->
+                                            DrawerDateItem(
+                                                text = epgDateFormatter.format(d),
+                                                selected = (d == selectedDate),
+                                                focusRequester = if (index == dateFocusTargetIndex) selectedDateRequester else null,
+                                                onFocused = {
+                                                    activeColumn = DrawerColumn.Dates
+                                                    showDates = true
+                                                },
+                                                onClick = { selectedEpgDate = d }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -351,6 +574,7 @@ private fun DrawerColumnPanel(
 private fun DrawerGroupItem(
     name: String,
     selected: Boolean,
+    focusRequester: FocusRequester?,
     onFocused: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -364,7 +588,8 @@ private fun DrawerGroupItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 3.dp)
+            .let { m -> if (focusRequester != null) m.focusRequester(focusRequester) else m }
             .background(bg, RoundedCornerShape(12.dp))
             .onFocusChanged {
                 if (it.isFocused) onFocused()
@@ -403,7 +628,7 @@ private fun DrawerChannelItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 3.dp)
             .let { m -> if (focusRequester != null) m.focusRequester(focusRequester) else m }
             .background(bg, RoundedCornerShape(12.dp))
             .onFocusChanged {
@@ -430,17 +655,11 @@ private fun DrawerChannelItem(
                 color = MaterialTheme.colorScheme.onSurface
             )
             if (!nowProgramTitle.isNullOrBlank()) {
-                val programColor = if (nowProgramTitle.startsWith("回看：")) {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                } else {
-                    Color(0xFF3B82F6)
-                }
-                Text(
+                FocusMarqueeText(
                     text = nowProgramTitle,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
-                    color = programColor
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                    focused = focused
                 )
             } else {
                 Text(
@@ -459,6 +678,64 @@ private enum class ProgramTimeState {
     Past,
     Now,
     Future
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FocusMarqueeText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    focused: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = text,
+        maxLines = 1,
+        overflow = if (focused) TextOverflow.Clip else TextOverflow.Ellipsis,
+        style = style,
+        color = color,
+        modifier = modifier.then(if (focused) Modifier.basicMarquee(iterations = Int.MAX_VALUE) else Modifier)
+    )
+}
+
+@Composable
+private fun DrawerDateItem(
+    text: String,
+    selected: Boolean,
+    focusRequester: FocusRequester?,
+    onFocused: () -> Unit,
+    onClick: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused -> MaterialTheme.colorScheme.surfaceVariant
+        selected -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.01f)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .let { m -> if (focusRequester != null) m.focusRequester(focusRequester) else m }
+            .background(bg, RoundedCornerShape(12.dp))
+            .onFocusChanged {
+                if (it.isFocused) onFocused()
+                focused = it.isFocused
+            }
+            .focusable()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = text,
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
 }
 
 @Composable
@@ -484,7 +761,7 @@ private fun DrawerProgramItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 3.dp)
             .let { m -> if (focusRequester != null) m.focusRequester(focusRequester) else m }
             .background(bg, RoundedCornerShape(12.dp))
             .onFocusChanged {
@@ -501,15 +778,15 @@ private fun DrawerProgramItem(
             overflow = TextOverflow.Clip,
             style = MaterialTheme.typography.bodySmall,
             color = textColor,
-            modifier = Modifier.width(110.dp)
+            modifier = Modifier.width(96.dp)
         )
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
+        Spacer(modifier = Modifier.width(6.dp))
+        FocusMarqueeText(
             text = title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodyMedium,
-            color = textColor
+            color = textColor,
+            focused = focused,
+            modifier = Modifier.weight(1f, fill = true)
         )
     }
 }
@@ -537,4 +814,27 @@ private fun formatEpgTimeRange(startMillis: Long, endMillis: Long): String {
     val start = Instant.ofEpochMilli(startMillis).atZone(zone).toLocalTime()
     val end = Instant.ofEpochMilli(endMillis).atZone(zone).toLocalTime()
     return "${epgTimeFormatter.format(start)}-${epgTimeFormatter.format(end)}"
+}
+
+private fun millisToLocalDate(millis: Long, zone: ZoneId): LocalDate {
+    return Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
+}
+
+private suspend fun centerLazyListItem(state: LazyListState, index: Int) {
+    runCatching {
+        state.scrollToItem(index)
+    }
+
+    withFrameNanos { }
+
+    val layoutInfo = state.layoutInfo
+    val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+    val itemCenter = item.offset + (item.size / 2)
+    val delta = itemCenter - viewportCenter
+    if (delta != 0) {
+        runCatching {
+            state.animateScrollBy(delta.toFloat())
+        }
+    }
 }
