@@ -4,12 +4,13 @@ import android.util.Xml
 import org.xmlpull.v1.XmlPullParser
 import java.io.InputStream
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 object XmlTvParser {
     private val timeFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
-    private val timeRegex = Regex("^(\\d{12,14})(?:\\s*([+-]\\d{4}|Z))?.*$")
+    private val timeRegex = Regex("^(\\d{12,14})(?:\\s*([+-]\\d{2}:?\\d{2}|Z))?.*$")
 
     fun parse(inputStream: InputStream): EpgData {
         val programsByChannelId = HashMap<String, MutableList<EpgProgram>>()
@@ -126,8 +127,8 @@ object XmlTvParser {
         if (timeDigits.length < 12) return null
         val full = if (timeDigits.length >= 14) timeDigits.substring(0, 14) else timeDigits.substring(0, 12) + "00"
 
-        val offset = parseOffset(tzPart) ?: ZoneOffset.UTC
         val ldt = LocalDateTime.parse(full, timeFormatter)
+        val offset = parseOffset(tzPart) ?: ZoneId.systemDefault().rules.getOffset(ldt)
         return ldt.toInstant(offset).toEpochMilli()
     }
 

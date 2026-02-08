@@ -78,7 +78,7 @@ data class EpgData(
         )
         if (distance > maxSkewMillis) return null
 
-        return if (nowMillis < nearest.startMillis) "即将：${nearest.title}" else "回看：${nearest.title}"
+        return if (nowMillis < nearest.startMillis) nearest.title else "回看：${nearest.title}"
     }
 }
 
