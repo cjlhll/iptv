@@ -97,24 +97,21 @@ fun PlayerDrawer(
             return@LaunchedEffect
         }
 
+        withFrameNanos { }
+
         runCatching {
             channelListState.scrollToItem(focusTargetIndex)
         }
 
-        var focused = false
-        repeat(5) {
+        repeat(3) {
             withFrameNanos { }
             if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) {
-                focused = true
-                return@repeat
+                pendingFocusToChannels = false
+                return@LaunchedEffect
             }
         }
 
-        if (!focused) {
-            pendingFocusToChannels = false
-        } else {
-            pendingFocusToChannels = false
-        }
+        pendingFocusToChannels = false
     }
 
     AnimatedVisibility(
@@ -155,7 +152,7 @@ fun PlayerDrawer(
                             .padding(16.dp),
                     ) {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(groups) { g ->
+                            items(groups, key = { it }) { g ->
                                 DrawerGroupItem(
                                     name = g,
                                     selected = g == selectedGroup,
@@ -184,7 +181,7 @@ fun PlayerDrawer(
                             modifier = Modifier.fillMaxSize(),
                             state = channelListState
                         ) {
-                            items(channels) { ch ->
+                            items(channels, key = { it.url }) { ch ->
                                 val selected = ch.url == selectedChannelUrl
                                 DrawerChannelItem(
                                     channel = ch,

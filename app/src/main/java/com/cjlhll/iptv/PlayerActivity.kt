@@ -177,6 +177,7 @@ fun VideoPlayerScreen(
     var selectedGroup by remember { mutableStateOf("全部") }
     var epgData by remember { mutableStateOf<EpgData?>(null) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var nowProgramTitleByUrl by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
     val epgLoadTag = remember { "EPG" }
 
@@ -235,10 +236,15 @@ fun VideoPlayerScreen(
 
         if (content == null) return@LaunchedEffect
 
-        val parsed = M3uParser.parse(content)
+        val (parsed, bestIndex) = withContext(Dispatchers.Default) {
+            val parsedChannels = M3uParser.parse(content)
+            val idx = if (parsedChannels.isEmpty()) 0 else (findBestChannelIndex(parsedChannels, url, title) ?: 0)
+            parsedChannels to idx
+        }
+
         if (parsed.isEmpty()) return@LaunchedEffect
         channels = parsed
-        currentIndex = findBestChannelIndex(parsed, url, title) ?: 0
+        currentIndex = bestIndex
     }
 
     LaunchedEffect(channels, currentIndex) {
@@ -264,20 +270,12 @@ fun VideoPlayerScreen(
         val loaded = EpgRepository.load(context, epgSource)
         epgData = loaded
         if (loaded != null) {
-            val matched = channels.count { loaded.resolveChannelId(it) != null }
+            val matched = withContext(Dispatchers.Default) {
+                channels.count { loaded.resolveChannelId(it) != null }
+            }
             Log.i(epgLoadTag, "loaded. programs=${loaded.programsByChannelId.size}, matched=$matched/${channels.size}")
         } else {
             Log.w(epgLoadTag, "load failed or parsed empty")
-        }
-    }
-
-    val nowProgramTitleByUrl = remember(epgData, nowMillis, channels) {
-        val data = epgData ?: return@remember emptyMap()
-        buildMap {
-            for (ch in channels) {
-                val t = data.nowProgramTitle(ch, nowMillis)
-                if (!t.isNullOrBlank()) put(ch.url, t)
-            }
         }
     }
 
@@ -293,6 +291,24 @@ fun VideoPlayerScreen(
     val filteredChannels = remember(channels, selectedGroup) {
         if (selectedGroup == "全部") channels
         else channels.filter { (it.group?.takeIf { g -> g.isNotBlank() } ?: "未分组") == selectedGroup }
+    }
+
+    LaunchedEffect(epgData, nowMillis, filteredChannels) {
+        val data = epgData
+        if (data == null || filteredChannels.isEmpty()) {
+            nowProgramTitleByUrl = emptyMap()
+            return@LaunchedEffect
+        }
+
+        val map = withContext(Dispatchers.Default) {
+            buildMap {
+                for (ch in filteredChannels) {
+                    val t = data.nowProgramTitle(ch, nowMillis)
+                    if (!t.isNullOrBlank()) put(ch.url, t)
+                }
+            }
+        }
+        nowProgramTitleByUrl = map
     }
 
     fun playChannel(channel: Channel) {
