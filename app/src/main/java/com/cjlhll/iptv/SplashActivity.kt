@@ -10,12 +10,16 @@ class SplashActivity : ComponentActivity() {
 
         val liveSource = Prefs.getLiveSource(this)
         val (lastUrl, lastTitle) = Prefs.getLastChannel(this)
+        val playlistFileName = Prefs.getPlaylistFileName(this)
 
         if (liveSource.isNotBlank() && !lastUrl.isNullOrBlank()) {
             // Configured and has history -> Go to Player directly
             val intent = Intent(this, PlayerActivity::class.java).apply {
                 putExtra("VIDEO_URL", lastUrl)
                 putExtra("VIDEO_TITLE", lastTitle ?: "Live")
+                if (!playlistFileName.isNullOrBlank()) {
+                    putExtra("PLAYLIST_FILE_NAME", playlistFileName)
+                }
             }
             startActivity(intent)
         } else {

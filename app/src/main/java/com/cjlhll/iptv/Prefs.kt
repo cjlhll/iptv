@@ -9,6 +9,7 @@ object Prefs {
     private const val KEY_EPG_SOURCE = "epg_source"
     private const val KEY_LAST_CHANNEL_URL = "last_channel_url"
     private const val KEY_LAST_CHANNEL_TITLE = "last_channel_title"
+    private const val KEY_PLAYLIST_FILE_NAME = "playlist_file_name"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -42,5 +43,13 @@ object Prefs {
             .putString(KEY_LAST_CHANNEL_URL, url)
             .putString(KEY_LAST_CHANNEL_TITLE, title)
             .apply()
+    }
+
+    fun getPlaylistFileName(context: Context): String? {
+        return getPrefs(context).getString(KEY_PLAYLIST_FILE_NAME, null)
+    }
+
+    fun setPlaylistFileName(context: Context, fileName: String) {
+        getPrefs(context).edit().putString(KEY_PLAYLIST_FILE_NAME, fileName).apply()
     }
 }

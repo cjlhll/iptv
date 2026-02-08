@@ -121,25 +121,32 @@ fun MainScreen() {
                     }
                     
                     if (content != null) {
-                        val (lastUrl, lastTitle) = Prefs.getLastChannel(context)
-                        val channel = findChannel(content, lastUrl, lastTitle)
-                        
-                        if (channel != null) {
-                            val (playUrl, playTitle) = channel
-                            // Save this channel as last played immediately
-                            Prefs.setLastChannel(context, playUrl, playTitle)
-                            
-                            val intent = Intent(context, PlayerActivity::class.java).apply {
-                                putExtra("VIDEO_URL", playUrl)
-                                putExtra("VIDEO_TITLE", playTitle)
-                            }
-                            context.startActivity(intent)
-                            
-                            // Finish config activity so back button doesn't return here
-                            (context as? android.app.Activity)?.finish()
-                        } else {
-                            Toast.makeText(context, "未找到有效的直播频道", Toast.LENGTH_SHORT).show()
+                        val playlistFileName = PlaylistCache.fileNameForSource(url)
+                        withContext(Dispatchers.IO) {
+                            PlaylistCache.write(context, playlistFileName, content)
                         }
+                        Prefs.setPlaylistFileName(context, playlistFileName)
+
+                        val channels = M3uParser.parse(content)
+                        if (channels.isEmpty()) {
+                            Toast.makeText(context, "未找到有效的直播频道", Toast.LENGTH_SHORT).show()
+                            return@launch
+                        }
+
+                        val (lastUrl, lastTitle) = Prefs.getLastChannel(context)
+                        val startIndex = findBestChannelIndex(channels, lastUrl, lastTitle) ?: 0
+                        val startChannel = channels.getOrElse(startIndex) { channels.first() }
+
+                        Prefs.setLastChannel(context, startChannel.url, startChannel.title)
+
+                        val intent = Intent(context, PlayerActivity::class.java).apply {
+                            putExtra("VIDEO_URL", startChannel.url)
+                            putExtra("VIDEO_TITLE", startChannel.title)
+                            putExtra("PLAYLIST_FILE_NAME", playlistFileName)
+                        }
+                        context.startActivity(intent)
+
+                        (context as? android.app.Activity)?.finish()
                     }
                 } else {
                     Toast.makeText(context, "加载失败: ${response.code}", Toast.LENGTH_SHORT).show()
@@ -232,6 +239,19 @@ fun MainScreen() {
             }
         }
     }
+}
+
+fun findBestChannelIndex(channels: List<Channel>, lastUrl: String?, lastTitle: String?): Int? {
+    if (channels.isEmpty()) return null
+    if (!lastUrl.isNullOrBlank()) {
+        val urlIndex = channels.indexOfFirst { it.url == lastUrl }
+        if (urlIndex >= 0) return urlIndex
+    }
+    if (!lastTitle.isNullOrBlank()) {
+        val titleIndex = channels.indexOfFirst { it.title == lastTitle }
+        if (titleIndex >= 0) return titleIndex
+    }
+    return 0
 }
 
 fun findChannel(m3uContent: String, lastUrl: String?, lastTitle: String?): Pair<String, String>? {
