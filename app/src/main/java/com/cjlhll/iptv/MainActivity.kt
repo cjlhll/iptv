@@ -92,18 +92,7 @@ fun MainScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    
-    var lastBackPressTime by remember { mutableStateOf(0L) }
-    BackHandler {
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastBackPressTime > 2000) {
-            lastBackPressTime = currentTime
-            Toast.makeText(context, "再按一次退出app", Toast.LENGTH_SHORT).show()
-        } else {
-            (context as? android.app.Activity)?.finish()
-        }
-    }
-    
+
     // Load initial values from Prefs
     val savedLiveSource = remember { Prefs.getLiveSource(context) }
     val savedEpgSource = remember { Prefs.getEpgSource(context) }

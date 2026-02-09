@@ -10,6 +10,7 @@ object Prefs {
     private const val KEY_LAST_CHANNEL_URL = "last_channel_url"
     private const val KEY_LAST_CHANNEL_TITLE = "last_channel_title"
     private const val KEY_PLAYLIST_FILE_NAME = "playlist_file_name"
+    private const val KEY_LAST_EPG_UPDATE_TIME = "last_epg_update_time"
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -29,6 +30,14 @@ object Prefs {
 
     fun setEpgSource(context: Context, url: String) {
         getPrefs(context).edit().putString(KEY_EPG_SOURCE, url).apply()
+    }
+
+    fun getLastEpgUpdateTime(context: Context): Long {
+        return getPrefs(context).getLong(KEY_LAST_EPG_UPDATE_TIME, 0L)
+    }
+
+    fun setLastEpgUpdateTime(context: Context, time: Long) {
+        getPrefs(context).edit().putLong(KEY_LAST_EPG_UPDATE_TIME, time).apply()
     }
 
     fun getLastChannel(context: Context): Pair<String?, String?> {

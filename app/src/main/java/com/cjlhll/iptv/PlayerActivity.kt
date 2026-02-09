@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.app.Activity
 import androidx.activity.ComponentActivity
@@ -285,6 +286,7 @@ fun VideoPlayerScreen(
     var catchupSeekPingAt by remember { mutableStateOf(0L) }
 
     val epgLoadTag = remember { "EPG" }
+    val shouldRefreshEpg = remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         setDrawerOpenController { drawerOpen = it }
@@ -403,9 +405,13 @@ fun VideoPlayerScreen(
         }
 
         // 3. Loop for Network Updates
+        var lastM3uAttemptTime = 0L
+
         while (true) {
+            val now = System.currentTimeMillis()
+
             // Update M3U
-            if (isNetworkM3u) {
+            if (isNetworkM3u && (now - lastM3uAttemptTime > 30 * 60 * 1000L)) {
                 val content = withContext(Dispatchers.IO) {
                     val client = OkHttpClient()
                     val request = Request.Builder().url(liveSource).build()
@@ -439,24 +445,42 @@ fun VideoPlayerScreen(
                         }
                     }
                 }
+                lastM3uAttemptTime = now
             }
 
             // Update EPG
             if (epgSource.isNotBlank()) {
-                val newEpg = EpgRepository.load(context, epgSource, forceRefresh = true)
-                if (newEpg != null) {
-                    epgData = newEpg
-                    val currentChannels = channels
-                    val matched = withContext(Dispatchers.Default) {
-                        currentChannels.count { newEpg.resolveChannelId(it) != null }
+                val lastEpgUpdate = Prefs.getLastEpgUpdateTime(context)
+                val zone = ZoneId.systemDefault()
+                val lastDate = Instant.ofEpochMilli(lastEpgUpdate).atZone(zone).toLocalDate()
+                val nowDate = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+
+                val isDifferentDay = !lastDate.isEqual(nowDate)
+                val isOver6Hours = (now - lastEpgUpdate) > 6 * 3600 * 1000L
+
+                if (shouldRefreshEpg.value || isDifferentDay || isOver6Hours) {
+                    val newEpg = EpgRepository.load(context, epgSource, forceRefresh = true)
+                    if (newEpg != null) {
+                        epgData = newEpg
+                        Prefs.setLastEpgUpdateTime(context, System.currentTimeMillis())
+                        val currentChannels = channels
+                        val matched = withContext(Dispatchers.Default) {
+                            currentChannels.count { newEpg.resolveChannelId(it) != null }
+                        }
+                        Log.i(epgLoadTag, "network refreshed. programs=${newEpg.programsByChannelId.size}, matched=$matched/${currentChannels.size}")
+                        if (shouldRefreshEpg.value) {
+                            withContext(Dispatchers.Main) {
+                                android.widget.Toast.makeText(context, "EPG更新成功", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
-                    Log.i(epgLoadTag, "network refreshed. programs=${newEpg.programsByChannelId.size}, matched=$matched/${currentChannels.size}")
+                    shouldRefreshEpg.value = false
                 }
             }
 
             if (!isNetworkM3u && epgSource.isBlank()) break
 
-            delay(30 * 60 * 1000L)
+            delay(10_000L)
         }
     }
 
@@ -635,6 +659,9 @@ fun VideoPlayerScreen(
                     setKeepContentOnPlayerReset(true)
                     setShutterBackgroundColor(Color.TRANSPARENT)
                     keepScreenOn = true
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
                 }
             },
             update = {
@@ -672,7 +699,9 @@ fun VideoPlayerScreen(
                 // (context as? android.app.Activity)?.finish() // Keep PlayerActivity in back stack
             },
             onEpgSettingsClick = {
-                // Placeholder
+                shouldRefreshEpg.value = true
+                settingsDrawerOpen = false
+                android.widget.Toast.makeText(context, "开始更新EPG...", android.widget.Toast.LENGTH_SHORT).show()
             },
             onClose = { settingsDrawerOpen = false }
         )
@@ -705,7 +734,7 @@ fun VideoPlayerScreen(
     }
 }
 
-private val catchupTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val catchupTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
 @Composable
 private fun CatchupProgressBar(

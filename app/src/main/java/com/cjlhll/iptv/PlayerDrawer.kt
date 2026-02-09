@@ -511,6 +511,7 @@ fun PlayerDrawer(
                             items(channels, key = { it.url }) { ch ->
                                 DrawerChannelItem(
                                     channel = ch,
+                                    selected = (ch.url == selectedChannelUrl),
                                     nowProgram = nowProgramByChannelUrl[ch.url],
                                     focusRequester = if (ch.url == focusTargetUrl) selectedChannelRequester else null,
                                     onFocused = {
@@ -519,7 +520,11 @@ fun PlayerDrawer(
                                         showDates = false
                                         showGroups = false
                                     },
-                                    onClick = { onSelectChannel(ch) }
+                                    onClick = {
+                                        focusedChannelUrl = ch.url
+                                        pendingFocusToChannels = true
+                                        onSelectChannel(ch)
+                                    }
                                 )
                             }
                         }
@@ -728,6 +733,7 @@ private fun DrawerGroupItem(
 @Composable
 private fun DrawerChannelItem(
     channel: Channel,
+    selected: Boolean,
     nowProgram: NowProgramUi?,
     focusRequester: FocusRequester?,
     onFocused: () -> Unit,
@@ -736,6 +742,7 @@ private fun DrawerChannelItem(
     var focused by remember { mutableStateOf(false) }
     val bg = when {
         focused -> MaterialTheme.colorScheme.surfaceVariant
+        selected -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
         else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.01f)
     }
 

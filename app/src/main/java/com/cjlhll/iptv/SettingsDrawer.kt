@@ -51,6 +51,7 @@ fun SettingsDrawer(
     val shape = RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)
 
     val sourceConfigRequester = remember { FocusRequester() }
+    val epgSettingsRequester = remember { FocusRequester() }
     
     // Auto focus first item when opened
     LaunchedEffect(visible) {
@@ -105,8 +106,8 @@ fun SettingsDrawer(
                     Spacer(modifier = Modifier.padding(8.dp))
                     
                     SettingsItem(
-                        text = "EPG设置",
-                        focusRequester = null,
+                        text = "更新EPG",
+                        focusRequester = epgSettingsRequester,
                         onClick = onEpgSettingsClick
                     )
                 }
@@ -134,7 +135,10 @@ private fun SettingsItem(
             .background(bg, RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
-            .clickable(onClick = onClick)
+            .clickable {
+                onClick()
+                focusRequester?.requestFocus()
+            }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
