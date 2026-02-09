@@ -366,7 +366,6 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(playlistFileName, url, title) {
         val liveSource = Prefs.getLiveSource(context)
-        val epgSource = Prefs.getEpgSource(context)
         val isNetworkM3u = playlistFileName.isNullOrBlank() && liveSource.isNotBlank()
 
         // 1. Initial Cache Load (M3U)
@@ -391,8 +390,56 @@ fun VideoPlayerScreen(
             }
         }
 
-        // 2. Initial Cache Load (EPG)
+        // 2. Loop for Network Updates (M3U Only)
+        if (isNetworkM3u) {
+            var lastM3uAttemptTime = 0L
+            while (true) {
+                val now = System.currentTimeMillis()
+                if (now - lastM3uAttemptTime > 30 * 60 * 1000L) {
+                    val content = withContext(Dispatchers.IO) {
+                        val client = OkHttpClient()
+                        val request = Request.Builder().url(liveSource).build()
+                        try {
+                            client.newCall(request).execute().use { response ->
+                                if (response.isSuccessful) response.body?.string() else null
+                            }
+                        } catch (e: Exception) { null }
+                    }
+
+                    if (content != null) {
+                        val fileNameToSave = PlaylistCache.fileNameForSource(liveSource)
+                        withContext(Dispatchers.IO) {
+                            PlaylistCache.write(context, fileNameToSave, content)
+                        }
+                        Prefs.setPlaylistFileName(context, fileNameToSave)
+
+                        val parsed = withContext(Dispatchers.Default) { M3uParser.parse(content) }
+
+                        if (parsed.isNotEmpty()) {
+                            val currentUrl = channels.getOrNull(currentIndex)?.url
+                            val newIndex = if (currentUrl != null) {
+                                parsed.indexOfFirst { it.url == currentUrl }.takeIf { it >= 0 }
+                            } else null
+
+                            channels = parsed
+                            if (newIndex != null) {
+                                currentIndex = newIndex
+                            } else {
+                                currentIndex = currentIndex.coerceIn(0, parsed.lastIndex)
+                            }
+                        }
+                    }
+                    lastM3uAttemptTime = now
+                }
+                delay(10_000L)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val epgSource = Prefs.getEpgSource(context)
         if (epgSource.isNotBlank()) {
+            // 1. Initial Cache Load (EPG)
             val cachedEpg = EpgRepository.load(context, epgSource, forceRefresh = false)
             if (cachedEpg != null) {
                 epgData = cachedEpg
@@ -402,54 +449,10 @@ fun VideoPlayerScreen(
                 }
                 Log.i(epgLoadTag, "cache loaded. programs=${cachedEpg.programsByChannelId.size}, matched=$matched/${currentChannels.size}")
             }
-        }
 
-        // 3. Loop for Network Updates
-        var lastM3uAttemptTime = 0L
-
-        while (true) {
-            val now = System.currentTimeMillis()
-
-            // Update M3U
-            if (isNetworkM3u && (now - lastM3uAttemptTime > 30 * 60 * 1000L)) {
-                val content = withContext(Dispatchers.IO) {
-                    val client = OkHttpClient()
-                    val request = Request.Builder().url(liveSource).build()
-                    try {
-                        client.newCall(request).execute().use { response ->
-                            if (response.isSuccessful) response.body?.string() else null
-                        }
-                    } catch (e: Exception) { null }
-                }
-
-                if (content != null) {
-                    val fileNameToSave = PlaylistCache.fileNameForSource(liveSource)
-                    withContext(Dispatchers.IO) {
-                        PlaylistCache.write(context, fileNameToSave, content)
-                    }
-                    Prefs.setPlaylistFileName(context, fileNameToSave)
-
-                    val parsed = withContext(Dispatchers.Default) { M3uParser.parse(content) }
-
-                    if (parsed.isNotEmpty()) {
-                        val currentUrl = channels.getOrNull(currentIndex)?.url
-                        val newIndex = if (currentUrl != null) {
-                            parsed.indexOfFirst { it.url == currentUrl }.takeIf { it >= 0 }
-                        } else null
-
-                        channels = parsed
-                        if (newIndex != null) {
-                            currentIndex = newIndex
-                        } else {
-                            currentIndex = currentIndex.coerceIn(0, parsed.lastIndex)
-                        }
-                    }
-                }
-                lastM3uAttemptTime = now
-            }
-
-            // Update EPG
-            if (epgSource.isNotBlank()) {
+            // 2. Loop for Network Updates (EPG Only)
+            while (true) {
+                val now = System.currentTimeMillis()
                 val lastEpgUpdate = Prefs.getLastEpgUpdateTime(context)
                 val zone = ZoneId.systemDefault()
                 val lastDate = Instant.ofEpochMilli(lastEpgUpdate).atZone(zone).toLocalDate()
@@ -476,11 +479,8 @@ fun VideoPlayerScreen(
                     }
                     shouldRefreshEpg.value = false
                 }
+                delay(10_000L)
             }
-
-            if (!isNetworkM3u && epgSource.isBlank()) break
-
-            delay(10_000L)
         }
     }
 

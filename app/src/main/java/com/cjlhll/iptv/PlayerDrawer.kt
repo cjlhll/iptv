@@ -137,7 +137,8 @@ fun PlayerDrawer(
         if (stableFocusedChannelUrl == null) {
             stableFocusedChannelUrl = focusedChannelUrl
         } else {
-            kotlinx.coroutines.delay(250)
+            // Debounce for 500ms to avoid frequent loading during rapid scrolling
+            kotlinx.coroutines.delay(500)
             stableFocusedChannelUrl = focusedChannelUrl
         }
     }
@@ -170,7 +171,9 @@ fun PlayerDrawer(
             showGroups = false
             showDates = false
             pendingFocusToChannels = true
-            focusedChannelUrl = selectedChannelUrl ?: channels.firstOrNull()?.url
+            val targetUrl = selectedChannelUrl ?: channels.firstOrNull()?.url
+            focusedChannelUrl = targetUrl
+            stableFocusedChannelUrl = targetUrl
         }
     }
 
@@ -291,16 +294,12 @@ fun PlayerDrawer(
         if (programsBySelectedDate.isEmpty()) {
             ProgramWindow(emptyList(), 0)
         } else {
-            val baseIndex = if (selectedEpgDate == todayDate) {
+            val focusIndex = if (selectedEpgDate == todayDate) {
                 indexOfProgramAt(programsBySelectedDate, nowMillis)
             } else {
                 0
             }
-            val start = (baseIndex - 12).coerceAtLeast(0)
-            val end = (start + 60).coerceAtMost(programsBySelectedDate.size)
-            val slice = programsBySelectedDate.subList(start, end)
-            val focusIndex = (baseIndex - start).coerceIn(0, slice.lastIndex)
-            ProgramWindow(slice, focusIndex)
+            ProgramWindow(programsBySelectedDate, focusIndex)
         }
     }
 
@@ -336,10 +335,10 @@ fun PlayerDrawer(
         pendingFocusToPrograms = false
     }
 
-    LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate) {
+    LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate, programWindow) {
         if (!visible) return@LaunchedEffect
         if (programWindow.programs.isEmpty()) return@LaunchedEffect
-        if (activeColumn != DrawerColumn.Programs && activeColumn != DrawerColumn.Dates) return@LaunchedEffect
+        // if (activeColumn != DrawerColumn.Programs && activeColumn != DrawerColumn.Dates) return@LaunchedEffect
         centerLazyListItem(programListState, programWindow.focusIndex)
     }
 
@@ -508,9 +507,10 @@ fun PlayerDrawer(
                             modifier = Modifier.fillMaxSize(),
                             state = channelListState
                         ) {
-                            items(channels, key = { it.url }) { ch ->
+                            itemsIndexed(channels, key = { _, ch -> ch.url }) { index, ch ->
                                 DrawerChannelItem(
                                     channel = ch,
+                                    index = index + 1,
                                     selected = (ch.url == selectedChannelUrl),
                                     nowProgram = nowProgramByChannelUrl[ch.url],
                                     focusRequester = if (ch.url == focusTargetUrl) selectedChannelRequester else null,
@@ -733,6 +733,7 @@ private fun DrawerGroupItem(
 @Composable
 private fun DrawerChannelItem(
     channel: Channel,
+    index: Int,
     selected: Boolean,
     nowProgram: NowProgramUi?,
     focusRequester: FocusRequester?,
@@ -769,7 +770,7 @@ private fun DrawerChannelItem(
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f, fill = true)) {
             Text(
-                text = channel.title,
+                text = "$index. ${channel.title}",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleMedium,
@@ -909,7 +910,7 @@ private fun DrawerProgramItem(
 
     val textColor = when (timeState) {
         ProgramTimeState.Past -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-        ProgramTimeState.Now -> MaterialTheme.colorScheme.primary
+        ProgramTimeState.Now -> Color(0xFF40C4FF) // Light Blue A200
         ProgramTimeState.Future -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f)
     }
 
