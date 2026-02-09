@@ -56,6 +56,8 @@ class PlayerActivity : ComponentActivity() {
     private var isDrawerOpen: Boolean = false
     private var setSettingsDrawerOpen: ((Boolean) -> Unit)? = null
     private var isSettingsDrawerOpen: Boolean = false
+    private var setInfoBannerOpen: ((Boolean) -> Unit)? = null
+    private var isInfoBannerOpen: Boolean = false
     private var lastBackPressTime: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,7 +94,9 @@ class PlayerActivity : ComponentActivity() {
                         setDrawerOpenController = { setDrawerOpen = it },
                         onDrawerOpenChanged = { isDrawerOpen = it },
                         setSettingsDrawerOpenController = { setSettingsDrawerOpen = it },
-                        onSettingsDrawerOpenChanged = { isSettingsDrawerOpen = it }
+                        onSettingsDrawerOpenChanged = { isSettingsDrawerOpen = it },
+                        setInfoBannerOpenController = { setInfoBannerOpen = it },
+                        onInfoBannerOpenChanged = { isInfoBannerOpen = it }
                     ) {
                         finish()
                     }
@@ -104,6 +108,13 @@ class PlayerActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (!isDrawerOpen && !isSettingsDrawerOpen) {
+                        setInfoBannerOpen?.invoke(true)
+                        return true
+                    }
+                }
+
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     if (!isDrawerOpen && !isSettingsDrawerOpen) {
                         setDrawerOpen?.invoke(true)
@@ -132,6 +143,10 @@ class PlayerActivity : ComponentActivity() {
                     }
                     if (isSettingsDrawerOpen) {
                         setSettingsDrawerOpen?.invoke(false)
+                        return true
+                    }
+                    if (isInfoBannerOpen) {
+                        setInfoBannerOpen?.invoke(false)
                         return true
                     }
                     val currentTime = System.currentTimeMillis()
@@ -166,11 +181,15 @@ fun VideoPlayerScreen(
     onDrawerOpenChanged: (Boolean) -> Unit,
     setSettingsDrawerOpenController: (((Boolean) -> Unit)?) -> Unit,
     onSettingsDrawerOpenChanged: (Boolean) -> Unit,
+    setInfoBannerOpenController: (((Boolean) -> Unit)?) -> Unit,
+    onInfoBannerOpenChanged: (Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsDrawerOpen by remember { mutableStateOf(false) }
+    var infoBannerOpen by remember { mutableStateOf(false) }
+    var videoFormat by remember { mutableStateOf<androidx.media3.common.Format?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val player = remember {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
@@ -216,9 +235,11 @@ fun VideoPlayerScreen(
     DisposableEffect(Unit) {
         setDrawerOpenController { drawerOpen = it }
         setSettingsDrawerOpenController { settingsDrawerOpen = it }
+        setInfoBannerOpenController { infoBannerOpen = it }
         onDispose {
             setDrawerOpenController(null)
             setSettingsDrawerOpenController(null)
+            setInfoBannerOpenController(null)
         }
     }
 
@@ -228,6 +249,14 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(settingsDrawerOpen) {
         onSettingsDrawerOpenChanged(settingsDrawerOpen)
+    }
+
+    LaunchedEffect(infoBannerOpen) {
+        onInfoBannerOpenChanged(infoBannerOpen)
+        if (infoBannerOpen) {
+            delay(5000)
+            infoBannerOpen = false
+        }
     }
 
     DisposableEffect(url) {
@@ -381,6 +410,14 @@ fun VideoPlayerScreen(
     DisposableEffect(Unit) {
         var retryCount = 0
         val listener = object : androidx.media3.common.Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                videoFormat = player.videoFormat
+            }
+
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                videoFormat = player.videoFormat
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 if (retryCount >= 3) return
                 retryCount += 1
@@ -447,6 +484,14 @@ fun VideoPlayerScreen(
                 // Placeholder
             },
             onClose = { settingsDrawerOpen = false }
+        )
+
+        ChannelInfoBanner(
+            visible = infoBannerOpen,
+            channel = channels.getOrNull(currentIndex),
+            programTitle = nowProgramTitleByUrl[channels.getOrNull(currentIndex)?.url],
+            videoFormat = videoFormat,
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 }
