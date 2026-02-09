@@ -7,6 +7,14 @@ import java.time.format.DateTimeFormatter
 
 enum class CatchupMode { APPEND, DEFAULT, NONE }
 
+data class CatchupPlayRequest(
+    val catchupUrl: String,
+    val liveUrl: String,
+    val programTitle: String,
+    val startMillis: Long,
+    val endMillis: Long
+)
+
 object CatchupHelper {
     private const val TAG = "CatchupHelper"
     private val YMDHMS = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")

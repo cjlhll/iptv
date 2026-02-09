@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Format
@@ -21,13 +22,14 @@ fun ChannelInfoBanner(
     channel: Channel?,
     programTitle: String?,
     videoFormat: Format?,
+    roundedTopCorners: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     // UI风格和抽屉保持一致
     // 抽屉是 surface alpha 0.92f
     val containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
     // 底部浮窗，上面两个角圆角
-    val shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    val shape = if (roundedTopCorners) RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp) else RectangleShape
 
     AnimatedVisibility(
         visible = visible,

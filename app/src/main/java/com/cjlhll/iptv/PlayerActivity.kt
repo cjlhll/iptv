@@ -6,10 +6,8 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -20,12 +18,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -49,6 +49,9 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color as ComposeColor
 import android.util.Log
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class PlayerActivity : ComponentActivity() {
     private var onChannelStep: ((Int) -> Boolean)? = null
@@ -58,7 +61,11 @@ class PlayerActivity : ComponentActivity() {
     private var isSettingsDrawerOpen: Boolean = false
     private var setInfoBannerOpen: ((Boolean) -> Unit)? = null
     private var isInfoBannerOpen: Boolean = false
+    private var isCatchupPlayback: Boolean = false
+    private var onCatchupSeek: ((Long) -> Boolean)? = null
+    private var onReturnToLive: (() -> Boolean)? = null
     private var lastBackPressTime: Long = 0
+    private var lastBackPressTimeCatchup: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +103,10 @@ class PlayerActivity : ComponentActivity() {
                         setSettingsDrawerOpenController = { setSettingsDrawerOpen = it },
                         onSettingsDrawerOpenChanged = { isSettingsDrawerOpen = it },
                         setInfoBannerOpenController = { setInfoBannerOpen = it },
-                        onInfoBannerOpenChanged = { isInfoBannerOpen = it }
+                        onInfoBannerOpenChanged = { isInfoBannerOpen = it },
+                        setOnCatchupSeek = { onCatchupSeek = it },
+                        setOnReturnToLive = { onReturnToLive = it },
+                        onCatchupPlaybackChanged = { isCatchupPlayback = it }
                     ) {
                         finish()
                     }
@@ -117,15 +127,23 @@ class PlayerActivity : ComponentActivity() {
 
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     if (!isDrawerOpen && !isSettingsDrawerOpen) {
-                        setDrawerOpen?.invoke(true)
-                        return true
+                        if (isCatchupPlayback) {
+                            if (onCatchupSeek?.invoke(-30_000L) == true) return true
+                        } else {
+                            setDrawerOpen?.invoke(true)
+                            return true
+                        }
                     }
                 }
 
                 KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (!isDrawerOpen && !isSettingsDrawerOpen) {
-                        setSettingsDrawerOpen?.invoke(true)
-                        return true
+                        if (isCatchupPlayback) {
+                            if (onCatchupSeek?.invoke(30_000L) == true) return true
+                        } else {
+                            setSettingsDrawerOpen?.invoke(true)
+                            return true
+                        }
                     }
                 }
 
@@ -149,6 +167,21 @@ class PlayerActivity : ComponentActivity() {
                         setInfoBannerOpen?.invoke(false)
                         return true
                     }
+
+                    if (isCatchupPlayback) {
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastBackPressTimeCatchup > 2000) {
+                            lastBackPressTimeCatchup = currentTime
+                            android.widget.Toast.makeText(this, "再按一次返回直播", android.widget.Toast.LENGTH_SHORT).show()
+                            return true
+                        }
+                        if (onReturnToLive?.invoke() == true) {
+                            lastBackPressTimeCatchup = 0
+                            return true
+                        }
+                        return true
+                    }
+
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastBackPressTime > 2000) {
                         lastBackPressTime = currentTime
@@ -158,11 +191,23 @@ class PlayerActivity : ComponentActivity() {
                 }
 
                 KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (!isDrawerOpen && !isSettingsDrawerOpen && onChannelStep?.invoke(-1) == true) return true
+                    if (!isDrawerOpen && !isSettingsDrawerOpen) {
+                        if (isCatchupPlayback) {
+                            setInfoBannerOpen?.invoke(true)
+                            return true
+                        }
+                        if (onChannelStep?.invoke(-1) == true) return true
+                    }
                 }
 
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (!isDrawerOpen && !isSettingsDrawerOpen && onChannelStep?.invoke(1) == true) return true
+                    if (!isDrawerOpen && !isSettingsDrawerOpen) {
+                        if (isCatchupPlayback) {
+                            setInfoBannerOpen?.invoke(true)
+                            return true
+                        }
+                        if (onChannelStep?.invoke(1) == true) return true
+                    }
                 }
             }
         }
@@ -183,6 +228,9 @@ fun VideoPlayerScreen(
     onSettingsDrawerOpenChanged: (Boolean) -> Unit,
     setInfoBannerOpenController: (((Boolean) -> Unit)?) -> Unit,
     onInfoBannerOpenChanged: (Boolean) -> Unit,
+    setOnCatchupSeek: (((Long) -> Boolean)?) -> Unit,
+    setOnReturnToLive: ((() -> Boolean)?) -> Unit,
+    onCatchupPlaybackChanged: (Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -229,6 +277,10 @@ fun VideoPlayerScreen(
     var epgData by remember { mutableStateOf<EpgData?>(null) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     var nowProgramByUrl by remember { mutableStateOf<Map<String, NowProgramUi>>(emptyMap()) }
+    var catchupRequest by remember { mutableStateOf<CatchupPlayRequest?>(null) }
+    var catchupPositionMs by remember { mutableStateOf(0L) }
+    var isCatchupProgressVisible by remember { mutableStateOf(false) }
+    var catchupSeekPingAt by remember { mutableStateOf(0L) }
 
     val epgLoadTag = remember { "EPG" }
 
@@ -256,6 +308,48 @@ fun VideoPlayerScreen(
         if (infoBannerOpen) {
             delay(5000)
             infoBannerOpen = false
+        }
+    }
+
+    LaunchedEffect(catchupRequest) {
+        onCatchupPlaybackChanged(catchupRequest != null)
+    }
+
+    LaunchedEffect(infoBannerOpen, catchupSeekPingAt, catchupRequest) {
+        val req = catchupRequest
+        if (req == null) {
+            isCatchupProgressVisible = false
+            return@LaunchedEffect
+        }
+
+        if (infoBannerOpen) {
+            isCatchupProgressVisible = true
+            return@LaunchedEffect
+        }
+
+        if (catchupSeekPingAt == 0L) {
+            isCatchupProgressVisible = false
+            return@LaunchedEffect
+        }
+
+        isCatchupProgressVisible = true
+        val token = catchupSeekPingAt
+        delay(1500)
+        if (!infoBannerOpen && catchupSeekPingAt == token) {
+            isCatchupProgressVisible = false
+        }
+    }
+
+    LaunchedEffect(catchupRequest) {
+        if (catchupRequest == null) {
+            catchupPositionMs = 0L
+            return@LaunchedEffect
+        }
+        while (true) {
+            val req = catchupRequest ?: break
+            val total = (req.endMillis - req.startMillis).coerceAtLeast(1L)
+            catchupPositionMs = player.currentPosition.coerceIn(0L, total)
+            delay(500)
         }
     }
 
@@ -423,11 +517,45 @@ fun VideoPlayerScreen(
     fun playChannel(channel: Channel) {
         val nextIndex = channels.indexOfFirst { it.url == channel.url }
         if (nextIndex < 0) return
+        catchupRequest = null
+        player.stop()
+        player.clearMediaItems()
         player.setMediaItem(MediaItem.fromUri(channel.url))
         player.prepare()
         player.play()
         currentIndex = nextIndex
         Prefs.setLastChannel(context, channel.url, channel.title)
+    }
+
+    DisposableEffect(player, channels, currentIndex, catchupRequest) {
+        setOnCatchupSeek { deltaMs ->
+            val req = catchupRequest ?: return@setOnCatchupSeek false
+            if (!player.isCurrentMediaItemSeekable) return@setOnCatchupSeek false
+            val total = (req.endMillis - req.startMillis).coerceAtLeast(1L)
+            val target = (player.currentPosition + deltaMs).coerceIn(0L, total)
+            player.seekTo(target)
+            catchupSeekPingAt = System.currentTimeMillis()
+            true
+        }
+        setOnReturnToLive {
+            val req = catchupRequest ?: return@setOnReturnToLive false
+            val channel = channels.firstOrNull { it.url == req.liveUrl }
+            if (channel != null) {
+                playChannel(channel)
+            } else {
+                catchupRequest = null
+                player.stop()
+                player.clearMediaItems()
+                player.setMediaItem(MediaItem.fromUri(req.liveUrl))
+                player.prepare()
+                player.play()
+            }
+            true
+        }
+        onDispose {
+            setOnCatchupSeek(null)
+            setOnReturnToLive(null)
+        }
     }
 
     DisposableEffect(channels, currentIndex) {
@@ -512,11 +640,12 @@ fun VideoPlayerScreen(
             nowMillis = nowMillis,
             onSelectGroup = { selectedGroup = it },
             onSelectChannel = { playChannel(it) },
-            onPlayProgram = { url ->
-                Log.d("PlayerActivity", "onPlayProgram called with url: $url")
+            onPlayProgram = { req ->
+                Log.d("PlayerActivity", "onPlayProgram called with url: ${req.catchupUrl}")
+                catchupRequest = req
                 player.stop()
                 player.clearMediaItems()
-                player.setMediaItem(MediaItem.fromUri(url))
+                player.setMediaItem(MediaItem.fromUri(req.catchupUrl))
                 player.prepare()
                 player.play()
                 drawerOpen = false
@@ -537,12 +666,92 @@ fun VideoPlayerScreen(
             onClose = { settingsDrawerOpen = false }
         )
 
-        ChannelInfoBanner(
-            visible = infoBannerOpen,
-            channel = channels.getOrNull(currentIndex),
-            programTitle = nowProgramByUrl[channels.getOrNull(currentIndex)?.url]?.title,
-            videoFormat = videoFormat,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        val req = catchupRequest
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.Bottom
+        ) {
+            if (req != null && isCatchupProgressVisible) {
+                CatchupProgressBar(
+                    startMillis = req.startMillis,
+                    endMillis = req.endMillis,
+                    positionMs = catchupPositionMs,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            ChannelInfoBanner(
+                visible = infoBannerOpen,
+                channel = channels.getOrNull(currentIndex),
+                programTitle = nowProgramByUrl[channels.getOrNull(currentIndex)?.url]?.title,
+                videoFormat = videoFormat,
+                roundedTopCorners = (req == null),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+private val catchupTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+@Composable
+private fun CatchupProgressBar(
+    startMillis: Long,
+    endMillis: Long,
+    positionMs: Long,
+    modifier: Modifier = Modifier
+) {
+    val total = (endMillis - startMillis).coerceAtLeast(1L)
+    val progress = (positionMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+    val zone = ZoneId.systemDefault()
+    val startText = catchupTimeFormatter.format(Instant.ofEpochMilli(startMillis).atZone(zone))
+    val endText = catchupTimeFormatter.format(Instant.ofEpochMilli(endMillis).atZone(zone))
+
+    val scrimBrush = Brush.verticalGradient(
+        0f to MaterialTheme.colorScheme.surface.copy(alpha = 0.0f),
+        0.45f to MaterialTheme.colorScheme.surface.copy(alpha = 0.14f),
+        1f to MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(96.dp)
+            .background(scrimBrush)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp, vertical = 14.dp)
+        ) {
+            androidx.tv.material3.Text(
+                text = startText,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(6.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            androidx.tv.material3.Text(
+                text = endText,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+            )
+        }
     }
 }

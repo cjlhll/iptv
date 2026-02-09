@@ -103,7 +103,7 @@ fun PlayerDrawer(
     nowMillis: Long = 0L,
     onSelectGroup: (String) -> Unit,
     onSelectChannel: (Channel) -> Unit,
-    onPlayProgram: (String) -> Unit,
+    onPlayProgram: (CatchupPlayRequest) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -605,7 +605,15 @@ fun PlayerDrawer(
                                                         )
                                                         Log.d("PlayerDrawer", "Generated catchup URL: $url")
                                                         if (url != null) {
-                                                            onPlayProgram(url)
+                                                            onPlayProgram(
+                                                                CatchupPlayRequest(
+                                                                    catchupUrl = url,
+                                                                    liveUrl = ch.url,
+                                                                    programTitle = p.title,
+                                                                    startMillis = p.startMillis,
+                                                                    endMillis = p.endMillis
+                                                                )
+                                                            )
                                                         } else {
                                                             Toast.makeText(context, "回看地址生成失败", Toast.LENGTH_SHORT).show()
                                                         }
