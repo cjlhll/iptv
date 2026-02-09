@@ -4,9 +4,13 @@ import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -200,7 +204,9 @@ fun PlayerDrawer(
         withFrameNanos { }
 
         runCatching {
-            channelListState.scrollToItem(focusTargetIndex)
+            if (channelListState.layoutInfo.visibleItemsInfo.none { it.index == focusTargetIndex }) {
+                channelListState.scrollToItem(focusTargetIndex)
+            }
         }
 
         repeat(3) {
@@ -298,7 +304,16 @@ fun PlayerDrawer(
 
         withFrameNanos { }
 
-        centerLazyListItem(programListState, programWindow.focusIndex)
+        if (runCatching { selectedProgramRequester.requestFocus() }.isSuccess) {
+            pendingFocusToPrograms = false
+            return@LaunchedEffect
+        }
+
+        runCatching {
+            if (programListState.layoutInfo.visibleItemsInfo.none { it.index == programWindow.focusIndex }) {
+                programListState.scrollToItem(programWindow.focusIndex)
+            }
+        }
 
         repeat(3) {
             withFrameNanos { }
@@ -314,7 +329,7 @@ fun PlayerDrawer(
     LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate) {
         if (!visible) return@LaunchedEffect
         if (programWindow.programs.isEmpty()) return@LaunchedEffect
-        withFrameNanos { }
+        if (activeColumn != DrawerColumn.Programs && activeColumn != DrawerColumn.Dates) return@LaunchedEffect
         centerLazyListItem(programListState, programWindow.focusIndex)
     }
 
@@ -353,6 +368,23 @@ fun PlayerDrawer(
         exit = slideOutHorizontally(animationSpec = tween(140), targetOffsetX = { -it }),
         modifier = modifier.fillMaxSize()
     ) {
+        val datesVisible = showDates && epgDates.isNotEmpty()
+        val targetDrawerWidth = remember(showGroups, datesVisible) {
+            val groupsSection = if (showGroups) (150.dp + 32.dp + 1.dp) else 0.dp
+            val channelsSection = 300.dp + 32.dp
+            val divider = 1.dp
+            val programsSection = 300.dp + 32.dp + (if (datesVisible) (110.dp + 10.dp) else 0.dp)
+            groupsSection + channelsSection + divider + programsSection
+        }
+        val drawerWidth by animateDpAsState(
+            targetValue = targetDrawerWidth,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessHigh
+            ),
+            label = "drawerWidth"
+        )
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -409,24 +441,15 @@ fun PlayerDrawer(
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .width(
-                        animateDpAsState(
-                            targetValue =
-                                (if (showGroups) (150.dp + 32.dp + 1.dp) else 0.dp) +
-                                (200.dp + 32.dp + 1.dp) +
-                                ((if (showDates && epgDates.isNotEmpty()) 440.dp else 300.dp) + 32.dp),
-                            animationSpec = tween(180),
-                            label = "drawerWidth"
-                        ).value
-                    )
+                    .width(drawerWidth)
                     .background(container, shape)
                     .padding(0.dp)
             ) {
                 Row(modifier = Modifier.fillMaxHeight()) {
                     AnimatedVisibility(
                         visible = showGroups,
-                        enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { -it }) + fadeIn(tween(120)),
-                        exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { -it }) + fadeOut(tween(100)),
+                        enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { -it }) + expandHorizontally(expandFrom = Alignment.Start) + fadeIn(tween(120)),
+                        exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { -it }) + shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(tween(100)),
                     ) {
                         Row(modifier = Modifier.fillMaxHeight()) {
                             DrawerColumnPanel(
@@ -505,7 +528,7 @@ fun PlayerDrawer(
                         title = "节目单",
                         modifier = Modifier
                             .fillMaxHeight()
-                            .width(if (showDates && epgDates.isNotEmpty()) 440.dp else 300.dp)
+                            .wrapContentWidth()
                             .padding(16.dp),
                     ) {
                         val programs = programWindow.programs
@@ -516,7 +539,7 @@ fun PlayerDrawer(
                             if (programs.isEmpty()) {
                                 Box(
                                     modifier = Modifier
-                                        .weight(1f, fill = true)
+                                        .width(300.dp)
                                         .fillMaxHeight(),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -529,7 +552,7 @@ fun PlayerDrawer(
                             } else {
                                 LazyColumn(
                                     modifier = Modifier
-                                        .weight(1f, fill = true)
+                                        .width(300.dp)
                                         .fillMaxHeight(),
                                     state = programListState
                                 ) {
@@ -588,8 +611,8 @@ fun PlayerDrawer(
 
                             AnimatedVisibility(
                                 visible = showDates && dates.isNotEmpty(),
-                                enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { it }) + fadeIn(tween(120)),
-                                exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { it }) + fadeOut(tween(100)),
+                                enter = slideInHorizontally(animationSpec = tween(140), initialOffsetX = { it }) + expandHorizontally(expandFrom = Alignment.Start) + fadeIn(tween(120)),
+                                exit = slideOutHorizontally(animationSpec = tween(120), targetOffsetX = { it }) + shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(tween(100)),
                             ) {
                                 Row(modifier = Modifier.fillMaxHeight()) {
                                     Spacer(modifier = Modifier.width(10.dp))
@@ -828,7 +851,7 @@ private fun DrawerProgramItem(
 
     val textColor = when (timeState) {
         ProgramTimeState.Past -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-        ProgramTimeState.Now -> Color(0xFF3B82F6)
+        ProgramTimeState.Now -> MaterialTheme.colorScheme.primary
         ProgramTimeState.Future -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f)
     }
 
@@ -896,20 +919,31 @@ private fun millisToLocalDate(millis: Long, zone: ZoneId): LocalDate {
 }
 
 private suspend fun centerLazyListItem(state: LazyListState, index: Int) {
-    runCatching {
+    withFrameNanos { }
+
+    suspend fun centerIfVisible(): Boolean {
+        val layoutInfo = state.layoutInfo
+        val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
+        val viewportSize = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+        val viewportCenter = layoutInfo.viewportStartOffset + (viewportSize / 2)
+        val itemCenter = item.offset + (item.size / 2)
+        val delta = itemCenter - viewportCenter
+        if (kotlin.math.abs(delta) <= 2) return true
+        val desiredStartOffset = ((viewportSize / 2) - (item.size / 2)).coerceAtLeast(0)
+        try {
+            state.scrollToItem(index, scrollOffset = desiredStartOffset)
+        } catch (_: Throwable) {
+        }
+        return true
+    }
+
+    if (centerIfVisible()) return
+
+    try {
         state.scrollToItem(index)
+    } catch (_: Throwable) {
     }
 
     withFrameNanos { }
-
-    val layoutInfo = state.layoutInfo
-    val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
-    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-    val itemCenter = item.offset + (item.size / 2)
-    val delta = itemCenter - viewportCenter
-    if (delta != 0) {
-        runCatching {
-            state.animateScrollBy(delta.toFloat())
-        }
-    }
+    centerIfVisible()
 }
