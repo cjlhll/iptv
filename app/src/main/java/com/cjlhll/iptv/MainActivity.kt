@@ -3,6 +3,7 @@ package com.cjlhll.iptv
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -84,6 +85,17 @@ class MainActivity : ComponentActivity() {
 fun MainScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    
+    var lastBackPressTime by remember { mutableStateOf(0L) }
+    BackHandler {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastBackPressTime > 2000) {
+            lastBackPressTime = currentTime
+            Toast.makeText(context, "再按一次退出app", Toast.LENGTH_SHORT).show()
+        } else {
+            (context as? android.app.Activity)?.finish()
+        }
+    }
     
     // Load initial values from Prefs
     val savedLiveSource = remember { Prefs.getLiveSource(context) }

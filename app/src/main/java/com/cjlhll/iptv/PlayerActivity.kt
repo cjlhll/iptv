@@ -56,6 +56,7 @@ class PlayerActivity : ComponentActivity() {
     private var isDrawerOpen: Boolean = false
     private var setSettingsDrawerOpen: ((Boolean) -> Unit)? = null
     private var isSettingsDrawerOpen: Boolean = false
+    private var lastBackPressTime: Long = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -131,6 +132,12 @@ class PlayerActivity : ComponentActivity() {
                     }
                     if (isSettingsDrawerOpen) {
                         setSettingsDrawerOpen?.invoke(false)
+                        return true
+                    }
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastBackPressTime > 2000) {
+                        lastBackPressTime = currentTime
+                        android.widget.Toast.makeText(this, "再按一次退出app", android.widget.Toast.LENGTH_SHORT).show()
                         return true
                     }
                 }
