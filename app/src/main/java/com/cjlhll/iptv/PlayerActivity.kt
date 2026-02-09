@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.WindowManager
+import android.app.Activity
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -518,8 +520,6 @@ fun VideoPlayerScreen(
         val nextIndex = channels.indexOfFirst { it.url == channel.url }
         if (nextIndex < 0) return
         catchupRequest = null
-        player.stop()
-        player.clearMediaItems()
         player.setMediaItem(MediaItem.fromUri(channel.url))
         player.prepare()
         player.play()
@@ -544,8 +544,6 @@ fun VideoPlayerScreen(
                 playChannel(channel)
             } else {
                 catchupRequest = null
-                player.stop()
-                player.clearMediaItems()
                 player.setMediaItem(MediaItem.fromUri(req.liveUrl))
                 player.prepare()
                 player.play()
@@ -579,7 +577,22 @@ fun VideoPlayerScreen(
 
     DisposableEffect(Unit) {
         var retryCount = 0
+        val activity = context as? Activity
+
+        fun setScreenOn(keepOn: Boolean) {
+            val window = activity?.window ?: return
+            if (keepOn) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+
         val listener = object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                setScreenOn(isPlaying)
+            }
+
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 videoFormat = player.videoFormat
             }
@@ -595,8 +608,6 @@ fun VideoPlayerScreen(
                 val current = player.currentMediaItem ?: return
                 scope.launch {
                     delay(800)
-                    player.stop()
-                    player.clearMediaItems()
                     player.setMediaItem(current)
                     player.prepare()
                     player.play()
@@ -605,7 +616,9 @@ fun VideoPlayerScreen(
         }
 
         player.addListener(listener)
+        setScreenOn(player.isPlaying)
         onDispose {
+            setScreenOn(false)
             player.removeListener(listener)
             player.release()
         }
@@ -643,8 +656,6 @@ fun VideoPlayerScreen(
             onPlayProgram = { req ->
                 Log.d("PlayerActivity", "onPlayProgram called with url: ${req.catchupUrl}")
                 catchupRequest = req
-                player.stop()
-                player.clearMediaItems()
                 player.setMediaItem(MediaItem.fromUri(req.catchupUrl))
                 player.prepare()
                 player.play()
