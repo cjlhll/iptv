@@ -4,7 +4,8 @@ data class EpgProgram(
     val channelId: String,
     val startMillis: Long,
     val endMillis: Long,
-    val title: String
+    val title: String,
+    val sourceOffsetSeconds: Int?
 )
 
 data class EpgData(

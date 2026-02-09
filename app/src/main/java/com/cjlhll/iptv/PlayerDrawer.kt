@@ -81,6 +81,16 @@ private data class ProgramWindow(
 private val epgTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private val epgDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")
 
+private fun zoneForPrograms(programs: List<EpgProgram>): ZoneId {
+    val seconds = programs.firstOrNull { it.sourceOffsetSeconds != null }?.sourceOffsetSeconds
+    return if (seconds != null) java.time.ZoneOffset.ofTotalSeconds(seconds) else ZoneId.systemDefault()
+}
+
+private fun zoneForProgram(program: EpgProgram, fallback: ZoneId): ZoneId {
+    val seconds = program.sourceOffsetSeconds
+    return if (seconds != null) java.time.ZoneOffset.ofTotalSeconds(seconds) else fallback
+}
+
 @Composable
 fun PlayerDrawer(
     visible: Boolean,
@@ -230,17 +240,17 @@ fun PlayerDrawer(
         channels.firstOrNull { it.url == url } ?: channels.firstOrNull()
     }
 
-    val zone = remember { ZoneId.systemDefault() }
-    val todayDate = remember(nowMillis, zone) {
-        Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
-    }
-
     val fullPrograms = remember(epgData, epgDataChannel) {
         val data = epgData
         val ch = epgDataChannel
         if (data == null || ch == null) return@remember emptyList()
         val channelId = data.resolveChannelId(ch) ?: return@remember emptyList()
         data.programsByChannelId[channelId].orEmpty()
+    }
+
+    val zone = remember(fullPrograms) { zoneForPrograms(fullPrograms) }
+    val todayDate = remember(nowMillis, zone) {
+        Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
     }
 
     val epgDates = remember(fullPrograms, zone) {
@@ -560,7 +570,11 @@ fun PlayerDrawer(
                                         items = programs,
                                         key = { _, p -> "${p.channelId}:${p.startMillis}:${p.endMillis}:${p.title}" }
                                     ) { index, p ->
-                                        val timeText = formatEpgTimeRange(p.startMillis, p.endMillis)
+                                        val timeText = formatEpgTimeRange(
+                                            startMillis = p.startMillis,
+                                            endMillis = p.endMillis,
+                                            zone = zoneForProgram(p, zone)
+                                        )
                                         val state = when {
                                             p.endMillis <= nowMillis -> ProgramTimeState.Past
                                             p.startMillis <= nowMillis && nowMillis < p.endMillis -> ProgramTimeState.Now
@@ -907,8 +921,7 @@ private fun indexOfProgramAt(programs: List<EpgProgram>, nowMillis: Long): Int {
     return lo.coerceIn(0, programs.lastIndex)
 }
 
-private fun formatEpgTimeRange(startMillis: Long, endMillis: Long): String {
-    val zone = ZoneId.systemDefault()
+private fun formatEpgTimeRange(startMillis: Long, endMillis: Long, zone: ZoneId): String {
     val start = Instant.ofEpochMilli(startMillis).atZone(zone).toLocalTime()
     val end = Instant.ofEpochMilli(endMillis).atZone(zone).toLocalTime()
     return "${epgTimeFormatter.format(start)}-${epgTimeFormatter.format(end)}"
