@@ -81,5 +81,31 @@ data class EpgData(
 
         return if (nowMillis < nearest.startMillis) nearest.title else "回看：${nearest.title}"
     }
+
+    fun nowProgram(channel: Channel, nowMillis: Long): EpgProgram? {
+        val channelId = resolveChannelId(channel) ?: return null
+        val programs = programsByChannelId[channelId] ?: return null
+        if (programs.isEmpty()) return null
+
+        var lo = 0
+        var hi = programs.lastIndex
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            val p = programs[mid]
+            if (nowMillis < p.startMillis) {
+                hi = mid - 1
+            } else if (nowMillis >= p.endMillis) {
+                lo = mid + 1
+            } else {
+                return p
+            }
+        }
+        return null
+    }
 }
+
+data class NowProgramUi(
+    val title: String,
+    val progress: Float?
+)
 

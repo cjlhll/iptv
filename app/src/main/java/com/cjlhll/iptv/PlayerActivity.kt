@@ -228,7 +228,7 @@ fun VideoPlayerScreen(
     var selectedGroup by remember { mutableStateOf("全部") }
     var epgData by remember { mutableStateOf<EpgData?>(null) }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    var nowProgramTitleByUrl by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var nowProgramByUrl by remember { mutableStateOf<Map<String, NowProgramUi>>(emptyMap()) }
 
     val epgLoadTag = remember { "EPG" }
 
@@ -397,7 +397,7 @@ fun VideoPlayerScreen(
     LaunchedEffect(epgData, nowMillis, filteredChannels) {
         val data = epgData
         if (data == null || filteredChannels.isEmpty()) {
-            nowProgramTitleByUrl = emptyMap()
+            nowProgramByUrl = emptyMap()
             return@LaunchedEffect
         }
 
@@ -405,11 +405,19 @@ fun VideoPlayerScreen(
             buildMap {
                 for (ch in filteredChannels) {
                     val t = data.nowProgramTitle(ch, nowMillis)
-                    if (!t.isNullOrBlank()) put(ch.url, t)
+                    if (!t.isNullOrBlank()) {
+                        val current = data.nowProgram(ch, nowMillis)
+                        val progress = current?.let {
+                            val duration = (it.endMillis - it.startMillis).toFloat()
+                            if (duration <= 0f) null
+                            else ((nowMillis - it.startMillis).toFloat() / duration).coerceIn(0f, 1f)
+                        }
+                        put(ch.url, NowProgramUi(title = t, progress = progress))
+                    }
                 }
             }
         }
-        nowProgramTitleByUrl = map
+        nowProgramByUrl = map
     }
 
     fun playChannel(channel: Channel) {
@@ -499,7 +507,7 @@ fun VideoPlayerScreen(
             selectedGroup = selectedGroup,
             channels = filteredChannels,
             selectedChannelUrl = channels.getOrNull(currentIndex)?.url,
-            nowProgramTitleByChannelUrl = nowProgramTitleByUrl,
+            nowProgramByChannelUrl = nowProgramByUrl,
             epgData = epgData,
             nowMillis = nowMillis,
             onSelectGroup = { selectedGroup = it },
@@ -532,7 +540,7 @@ fun VideoPlayerScreen(
         ChannelInfoBanner(
             visible = infoBannerOpen,
             channel = channels.getOrNull(currentIndex),
-            programTitle = nowProgramTitleByUrl[channels.getOrNull(currentIndex)?.url],
+            programTitle = nowProgramByUrl[channels.getOrNull(currentIndex)?.url]?.title,
             videoFormat = videoFormat,
             modifier = Modifier.align(Alignment.BottomCenter)
         )

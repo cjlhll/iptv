@@ -98,7 +98,7 @@ fun PlayerDrawer(
     selectedGroup: String,
     channels: List<Channel>,
     selectedChannelUrl: String?,
-    nowProgramTitleByChannelUrl: Map<String, String> = emptyMap(),
+    nowProgramByChannelUrl: Map<String, NowProgramUi> = emptyMap(),
     epgData: EpgData? = null,
     nowMillis: Long = 0L,
     onSelectGroup: (String) -> Unit,
@@ -512,7 +512,7 @@ fun PlayerDrawer(
                                 val selected = ch.url == selectedChannelUrl
                                 DrawerChannelItem(
                                     channel = ch,
-                                    nowProgramTitle = nowProgramTitleByChannelUrl[ch.url],
+                                    nowProgram = nowProgramByChannelUrl[ch.url],
                                     selected = selected,
                                     focusRequester = if (ch.url == focusTargetUrl) selectedChannelRequester else null,
                                     onFocused = {
@@ -722,7 +722,7 @@ private fun DrawerGroupItem(
 @Composable
 private fun DrawerChannelItem(
     channel: Channel,
-    nowProgramTitle: String?,
+    nowProgram: NowProgramUi?,
     selected: Boolean,
     focusRequester: FocusRequester?,
     onFocused: () -> Unit,
@@ -764,13 +764,23 @@ private fun DrawerChannelItem(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            if (!nowProgramTitle.isNullOrBlank()) {
+            if (!nowProgram?.title.isNullOrBlank()) {
                 FocusMarqueeText(
-                    text = nowProgramTitle,
+                    text = nowProgram?.title.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                     focused = focused
                 )
+                val progress = nowProgram?.progress
+                if (progress != null) {
+                    ThinProgressBar(
+                        progress = progress,
+                        focused = focused,
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .fillMaxWidth()
+                    )
+                }
             } else {
                 Text(
                     text = "暂无节目",
@@ -781,6 +791,29 @@ private fun DrawerChannelItem(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ThinProgressBar(
+    progress: Float,
+    focused: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val clamped = progress.coerceIn(0f, 1f)
+    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = if (focused) 0.16f else 0.12f)
+    val fill = MaterialTheme.colorScheme.primary.copy(alpha = if (focused) 0.95f else 0.80f)
+    Box(
+        modifier = modifier
+            .height(3.dp)
+            .background(track, RoundedCornerShape(999.dp))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(clamped)
+                .background(fill, RoundedCornerShape(999.dp))
+        )
     }
 }
 
