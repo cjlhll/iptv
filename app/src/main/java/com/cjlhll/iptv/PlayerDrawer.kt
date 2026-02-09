@@ -43,8 +43,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.foundation.lazy.LazyColumn
@@ -105,11 +107,21 @@ fun PlayerDrawer(
     var pendingFocusToDates by remember { mutableStateOf(false) }
 
     var focusedChannelUrl by remember { mutableStateOf<String?>(null) }
+    var stableFocusedChannelUrl by remember { mutableStateOf<String?>(null) }
 
     val groupListState = rememberLazyListState()
     val channelListState = rememberLazyListState()
     val programListState = rememberLazyListState()
     val dateListState = rememberLazyListState()
+
+    LaunchedEffect(focusedChannelUrl) {
+        if (stableFocusedChannelUrl == null) {
+            stableFocusedChannelUrl = focusedChannelUrl
+        } else {
+            kotlinx.coroutines.delay(250)
+            stableFocusedChannelUrl = focusedChannelUrl
+        }
+    }
 
     val groupFocusTargetIndex = remember(groups, selectedGroup) {
         val i = groups.indexOf(selectedGroup)
@@ -202,14 +214,19 @@ fun PlayerDrawer(
         channels.firstOrNull { it.url == url } ?: channels.firstOrNull()
     }
 
+    val epgDataChannel = remember(channels, stableFocusedChannelUrl, selectedChannelUrl) {
+        val url = stableFocusedChannelUrl ?: selectedChannelUrl
+        channels.firstOrNull { it.url == url } ?: channels.firstOrNull()
+    }
+
     val zone = remember { ZoneId.systemDefault() }
     val todayDate = remember(nowMillis, zone) {
         Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
     }
 
-    val fullPrograms = remember(epgData, focusedChannel) {
+    val fullPrograms = remember(epgData, epgDataChannel) {
         val data = epgData
-        val ch = focusedChannel
+        val ch = epgDataChannel
         if (data == null || ch == null) return@remember emptyList()
         val channelId = data.resolveChannelId(ch) ?: return@remember emptyList()
         data.programsByChannelId[channelId].orEmpty()
@@ -334,9 +351,29 @@ fun PlayerDrawer(
                 .fillMaxSize()
                 .background(scrim)
                 .onPreviewKeyEvent {
+                    if (it.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
                     if (it.key == Key.Back) {
                         onClose()
                         true
+                    } else if (it.key == Key.DirectionUp && activeColumn == DrawerColumn.Channels && channels.isNotEmpty()) {
+                        val index = channels.indexOfFirst { c -> c.url == focusedChannelUrl }
+                        if (index == 0) {
+                            focusedChannelUrl = channels.last().url
+                            pendingFocusToChannels = true
+                            true
+                        } else {
+                            false
+                        }
+                    } else if (it.key == Key.DirectionDown && activeColumn == DrawerColumn.Channels && channels.isNotEmpty()) {
+                        val index = channels.indexOfFirst { c -> c.url == focusedChannelUrl }
+                        if (index == channels.lastIndex) {
+                            focusedChannelUrl = channels.first().url
+                            pendingFocusToChannels = true
+                            true
+                        } else {
+                            false
+                        }
                     } else if (it.key == Key.DirectionLeft && activeColumn == DrawerColumn.Channels) {
                         if (!showGroups) showGroups = true
                         pendingFocusToGroups = true

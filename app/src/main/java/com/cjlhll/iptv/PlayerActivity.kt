@@ -278,12 +278,12 @@ fun VideoPlayerScreen(
         currentIndex = bestIndex
     }
 
-    LaunchedEffect(channels, currentIndex) {
-        val ch = channels.getOrNull(currentIndex)
-        if (ch != null) {
-            selectedGroup = ch.group?.takeIf { it.isNotBlank() } ?: "未分组"
-        }
-    }
+    // LaunchedEffect(channels, currentIndex) {
+    //     val ch = channels.getOrNull(currentIndex)
+    //     if (ch != null) {
+    //         selectedGroup = ch.group?.takeIf { it.isNotBlank() } ?: "未分组"
+    //     }
+    // }
 
     LaunchedEffect(Unit) {
         while (true) {
