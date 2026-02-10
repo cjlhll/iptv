@@ -285,6 +285,23 @@ fun VideoPlayerScreen(
     val epgLoadTag = remember { "EPG" }
     val shouldRefreshEpg = remember { mutableStateOf(false) }
 
+    var heavyWorkEnabled by remember { mutableStateOf(false) }
+    var firstDrawerOpenSeen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        delay(1500)
+        heavyWorkEnabled = true
+    }
+
+    LaunchedEffect(drawerOpen) {
+        if (drawerOpen && !firstDrawerOpenSeen) {
+            firstDrawerOpenSeen = true
+            heavyWorkEnabled = false
+            delay(900)
+            heavyWorkEnabled = true
+        }
+    }
+
     fun initializePlayer() {
         if (player != null) return
         
@@ -547,9 +564,9 @@ fun VideoPlayerScreen(
                             val idx = currentIndex
                             val urls = buildPrefetchLogoUrls(parsed, idx)
                             scope.launch {
+                                while (!heavyWorkEnabled) delay(200)
                                 LogoLoader.prefetch(context, urls, drawerLogoWidthPx, drawerLogoHeightPx)
-                            }
-                            scope.launch {
+                                delay(800)
                                 LogoLoader.prefetch(context, urls, bannerLogoWidthPx, bannerLogoHeightPx)
                             }
                         }
@@ -562,16 +579,13 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(Unit) {
+        while (!heavyWorkEnabled) delay(200)
         val epgSource = Prefs.getEpgSource(context)
         if (epgSource.isNotBlank()) {
             val cachedEpg = EpgRepository.load(context, epgSource, forceRefresh = false)
             if (cachedEpg != null) {
                 epgData = cachedEpg
-                val currentChannels = channels
-                val matched = withContext(Dispatchers.Default) {
-                    currentChannels.count { cachedEpg.resolveChannelId(it) != null }
-                }
-                Log.i(epgLoadTag, "cache loaded. programs=${cachedEpg.programsByChannelId.size}, matched=$matched/${currentChannels.size}")
+                Log.i(epgLoadTag, "cache loaded. programs=${cachedEpg.programsByChannelId.size}")
             }
 
             var lastAttemptTime = 0L
@@ -597,11 +611,7 @@ fun VideoPlayerScreen(
                     if (newEpg != null) {
                         epgData = newEpg
                         Prefs.setLastEpgUpdateTime(context, System.currentTimeMillis())
-                        val currentChannels = channels
-                        val matched = withContext(Dispatchers.Default) {
-                            currentChannels.count { newEpg.resolveChannelId(it) != null }
-                        }
-                        Log.i(epgLoadTag, "network refreshed. programs=${newEpg.programsByChannelId.size}, matched=$matched/${currentChannels.size}")
+                        Log.i(epgLoadTag, "network refreshed. programs=${newEpg.programsByChannelId.size}")
                         if (shouldRefreshEpg.value) {
                             withContext(Dispatchers.Main) {
                                 android.widget.Toast.makeText(context, "EPG更新成功", android.widget.Toast.LENGTH_SHORT).show()
@@ -638,7 +648,8 @@ fun VideoPlayerScreen(
         else channels.filter { (it.group?.takeIf { g -> g.isNotBlank() } ?: "未分组") == selectedGroup }
     }
 
-    LaunchedEffect(epgData, nowMillis, filteredChannels) {
+    LaunchedEffect(epgData, nowMillis, filteredChannels, heavyWorkEnabled) {
+        if (!heavyWorkEnabled) return@LaunchedEffect
         val data = epgData
         if (data == null || filteredChannels.isEmpty()) {
             nowProgramByUrl = emptyMap()
@@ -760,6 +771,7 @@ fun VideoPlayerScreen(
             groups = groups,
             selectedGroup = selectedGroup,
             channels = filteredChannels,
+            initialChannelIndex = filteredChannels.indexOfFirst { it.url == channels.getOrNull(currentIndex)?.url }.let { if (it >= 0) it else 0 },
             selectedChannelUrl = channels.getOrNull(currentIndex)?.url,
             nowProgramByChannelUrl = nowProgramByUrl,
             epgData = epgData,
@@ -860,10 +872,12 @@ fun VideoPlayerScreen(
 private fun buildPrefetchLogoUrls(channels: List<Channel>, currentIndex: Int): List<String> {
     if (channels.isEmpty()) return emptyList()
 
-    val out = ArrayList<String>(minOf(512, channels.size))
-    val seen = HashSet<String>(minOf(512, channels.size))
+    val maxUrls = 220
+    val out = ArrayList<String>(minOf(maxUrls, channels.size))
+    val seen = HashSet<String>(minOf(maxUrls, channels.size))
 
     fun addAt(index: Int) {
+        if (out.size >= maxUrls) return
         val url = channels.getOrNull(index)?.logoUrl?.trim().orEmpty()
         if (url.isNotBlank() && seen.add(url)) out.add(url)
     }
@@ -874,13 +888,8 @@ private fun buildPrefetchLogoUrls(channels: List<Channel>, currentIndex: Int): L
         addAt(currentIndex + delta)
     }
 
-    val head = minOf(80, channels.size)
+    val head = minOf(120, channels.size)
     for (i in 0 until head) addAt(i)
-
-    for (c in channels) {
-        val url = c.logoUrl?.trim().orEmpty()
-        if (url.isNotBlank() && seen.add(url)) out.add(url)
-    }
 
     return out
 }

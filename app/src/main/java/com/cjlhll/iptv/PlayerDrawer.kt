@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,23 +37,27 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -65,6 +70,17 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class DrawerColumn {
     Groups,
@@ -76,6 +92,12 @@ enum class DrawerColumn {
 private data class ProgramWindow(
     val programs: List<EpgProgram>,
     val focusIndex: Int
+)
+
+private data class EpgChannelUiData(
+    val zone: ZoneId,
+    val programs: List<EpgProgram>,
+    val dates: List<LocalDate>
 )
 
 private val epgTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -91,12 +113,14 @@ private fun zoneForProgram(program: EpgProgram, fallback: ZoneId): ZoneId {
     return if (seconds != null) java.time.ZoneOffset.ofTotalSeconds(seconds) else fallback
 }
 
+@OptIn(FlowPreview::class)
 @Composable
 fun PlayerDrawer(
     visible: Boolean,
     groups: List<String>,
     selectedGroup: String,
     channels: List<Channel>,
+    initialChannelIndex: Int = 0,
     selectedChannelUrl: String?,
     nowProgramByChannelUrl: Map<String, NowProgramUi> = emptyMap(),
     epgData: EpgData? = null,
@@ -128,19 +152,42 @@ fun PlayerDrawer(
     var focusedChannelUrl by remember { mutableStateOf<String?>(null) }
     var stableFocusedChannelUrl by remember { mutableStateOf<String?>(null) }
 
+    val visibleValue by rememberUpdatedState(visible)
+
+    var programsEnabled by remember { mutableStateOf(false) }
+
+    var autoProgramScrollKey by remember { mutableStateOf<String?>(null) }
+
+    val epgChannelUiCache = remember(epgData) {
+        object : LinkedHashMap<String, EpgChannelUiData>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, EpgChannelUiData>?): Boolean {
+                return size > 32
+            }
+        }
+    }
+
     // val groupListState = rememberLazyListState()
     // val channelListState = rememberLazyListState()
     // val programListState = rememberLazyListState()
     // val dateListState = rememberLazyListState()
 
-    LaunchedEffect(focusedChannelUrl) {
-        if (stableFocusedChannelUrl == null) {
-            stableFocusedChannelUrl = focusedChannelUrl
-        } else {
-            // Debounce for 500ms to avoid frequent loading during rapid scrolling
-            kotlinx.coroutines.delay(500)
-            stableFocusedChannelUrl = focusedChannelUrl
-        }
+    LaunchedEffect(Unit) {
+        snapshotFlow { focusedChannelUrl }
+            .filterNotNull()
+            .distinctUntilChanged()
+            .debounce(350)
+            .collectLatest { url ->
+                if (!visibleValue) return@collectLatest
+                if (stableFocusedChannelUrl != url) stableFocusedChannelUrl = url
+            }
+    }
+
+    LaunchedEffect(visible) {
+        if (!visible) return@LaunchedEffect
+        if (programsEnabled) return@LaunchedEffect
+        delay(180)
+        programsEnabled = true
+        autoProgramScrollKey = null
     }
 
     val groupFocusTargetIndex = remember(groups, selectedGroup) {
@@ -152,38 +199,36 @@ fun PlayerDrawer(
         groups.getOrNull(groupFocusTargetIndex)
     }
 
-    val focusTargetIndex = remember(channels, selectedChannelUrl, focusedChannelUrl) {
-        val url = focusedChannelUrl ?: selectedChannelUrl
-        if (!url.isNullOrBlank()) {
-            val i = channels.indexOfFirst { it.url == url }
-            if (i >= 0) i else 0
-        } else {
-            0
+    val channelIndexByUrl = remember(channels) {
+        HashMap<String, Int>(minOf(channels.size * 2, 4096)).apply {
+            for (i in channels.indices) {
+                put(channels[i].url, i)
+            }
         }
+    }
+
+    val focusTargetIndex = remember(channelIndexByUrl, selectedChannelUrl, focusedChannelUrl) {
+        val url = focusedChannelUrl ?: selectedChannelUrl
+        if (!url.isNullOrBlank()) channelIndexByUrl[url] ?: 0 else 0
     }
 
     val focusTargetUrl = remember(channels, focusTargetIndex) {
         channels.getOrNull(focusTargetIndex)?.url
     }
 
-    val groupListState = remember(visible, groupFocusTargetIndex) {
-        LazyListState(firstVisibleItemIndex = if (visible) groupFocusTargetIndex else 0)
-    }
+    val groupListState = rememberLazyListState()
 
-    val initialScrollIndex = remember(channels, selectedChannelUrl) {
+    val initialScrollIndex = remember(channelIndexByUrl, selectedChannelUrl) {
         val url = selectedChannelUrl
-        if (!url.isNullOrBlank()) {
-            val i = channels.indexOfFirst { it.url == url }
-            if (i >= 0) i else 0
-        } else {
-            0
-        }
+        if (!url.isNullOrBlank()) channelIndexByUrl[url] ?: 0 else 0
     }
 
-    val channelListState = rememberLazyListState()
+    val channelListState = remember(channels, initialChannelIndex) {
+        LazyListState(firstVisibleItemIndex = initialChannelIndex.coerceAtLeast(0))
+    }
 
-    val programListState = remember(visible) { LazyListState() }
-    val dateListState = remember(visible) { LazyListState() }
+    val programListState = rememberLazyListState()
+    val dateListState = rememberLazyListState()
 
     LaunchedEffect(visible) {
         if (visible) {
@@ -196,17 +241,29 @@ fun PlayerDrawer(
             stableFocusedChannelUrl = targetUrl
 
             if (channels.isNotEmpty()) {
-                if (channelListState.firstVisibleItemIndex != initialScrollIndex) {
-                     channelListState.scrollToItem(initialScrollIndex)
+                runCatching {
+                    snapshotFlow { channelListState.layoutInfo.visibleItemsInfo.isNotEmpty() }
+                        .filter { it }
+                        .first()
                 }
 
-                repeat(5) {
-                    if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) {
-                        return@LaunchedEffect
-                    }
+                repeat(2) {
+                    if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
                     withFrameNanos { }
                 }
             }
+        }
+    }
+
+    LaunchedEffect(selectedChannelUrl, channels, visible) {
+        if (visible) return@LaunchedEffect
+        if (channels.isEmpty()) return@LaunchedEffect
+        val target = initialScrollIndex
+        val current = channelListState.firstVisibleItemIndex
+        if (kotlin.math.abs(current - target) <= 40) return@LaunchedEffect
+        delay(200)
+        if (!visible && channels.isNotEmpty()) {
+            runCatching { channelListState.scrollToItem(target) }
         }
     }
 
@@ -285,28 +342,60 @@ fun PlayerDrawer(
         channels.firstOrNull { it.url == url } ?: channels.firstOrNull()
     }
 
-    val fullPrograms = remember(epgData, epgDataChannel) {
+    val epgChannelData by produceState<EpgChannelUiData?>(
+        initialValue = epgDataChannel?.url?.let { epgChannelUiCache[it] },
+        key1 = epgData,
+        key2 = epgDataChannel,
+        key3 = programsEnabled
+    ) {
+        if (!programsEnabled) return@produceState
         val data = epgData
         val ch = epgDataChannel
-        if (data == null || ch == null) return@remember emptyList()
-        val channelId = data.resolveChannelId(ch) ?: return@remember emptyList()
-        data.programsByChannelId[channelId].orEmpty()
+        if (data == null || ch == null) {
+            value = null
+            return@produceState
+        }
+        val cacheKey = ch.url
+        val cached = epgChannelUiCache[cacheKey]
+        if (cached != null) {
+            value = cached
+            return@produceState
+        }
+        value = withContext(Dispatchers.Default) {
+            val channelId = data.resolveChannelId(ch) ?: return@withContext EpgChannelUiData(
+                zone = ZoneId.systemDefault(),
+                programs = emptyList(),
+                dates = emptyList()
+            )
+            val programs = data.programsByChannelId[channelId].orEmpty()
+            if (programs.isEmpty()) return@withContext EpgChannelUiData(
+                zone = ZoneId.systemDefault(),
+                programs = emptyList(),
+                dates = emptyList()
+            )
+            val zone = zoneForPrograms(programs)
+            val dates = programs
+                .asSequence()
+                .map { millisToLocalDate(it.startMillis, zone) }
+                .distinct()
+                .sorted()
+                .toList()
+            EpgChannelUiData(zone = zone, programs = programs, dates = dates)
+        }
+
+        val computed = value
+        if (computed != null) {
+            epgChannelUiCache[cacheKey] = computed
+        }
     }
 
-    val zone = remember(fullPrograms) { zoneForPrograms(fullPrograms) }
+    val fullPrograms = epgChannelData?.programs.orEmpty()
+    val zone = epgChannelData?.zone ?: ZoneId.systemDefault()
     val todayDate = remember(nowMillis, zone) {
         Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
     }
 
-    val epgDates = remember(fullPrograms, zone) {
-        if (fullPrograms.isEmpty()) return@remember emptyList()
-        fullPrograms
-            .asSequence()
-            .map { millisToLocalDate(it.startMillis, zone) }
-            .distinct()
-            .sorted()
-            .toList()
-    }
+    val epgDates = epgChannelData?.dates.orEmpty()
 
     var selectedEpgDate by remember { mutableStateOf<LocalDate?>(null) }
 
@@ -338,7 +427,7 @@ fun PlayerDrawer(
         val d = selectedEpgDate ?: return@remember emptyList()
         val dayStart = d.atStartOfDay(zone).toInstant().toEpochMilli()
         val dayEnd = d.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        fullPrograms.filter { it.startMillis < dayEnd && it.endMillis > dayStart }
+        sliceProgramsOverlapping(fullPrograms, dayStart, dayEnd)
     }
 
     val programWindow = remember(programsBySelectedDate, nowMillis, selectedEpgDate, todayDate) {
@@ -354,14 +443,40 @@ fun PlayerDrawer(
         }
     }
 
+    val programScrollKey = remember(epgDataChannel?.url, selectedEpgDate) {
+        val url = epgDataChannel?.url ?: return@remember null
+        val date = selectedEpgDate?.toString() ?: ""
+        "$url|$date"
+    }
+
+    LaunchedEffect(visible, programScrollKey, programWindow.focusIndex, programWindow.programs.size) {
+        if (!visible) return@LaunchedEffect
+        val key = programScrollKey ?: return@LaunchedEffect
+        if (programWindow.programs.isEmpty()) return@LaunchedEffect
+        if (autoProgramScrollKey == key) return@LaunchedEffect
+        delay(80)
+        runCatching { programListState.scrollToItem((programWindow.focusIndex - 3).coerceAtLeast(0)) }
+        autoProgramScrollKey = key
+    }
+
     LaunchedEffect(pendingFocusToPrograms, visible, programWindow.focusIndex, programWindow.programs.size) {
         if (!pendingFocusToPrograms) return@LaunchedEffect
         if (!visible) return@LaunchedEffect
         if (programWindow.programs.isEmpty()) {
-            pendingFocusToPrograms = false
-            return@LaunchedEffect
+            withTimeoutOrNull(1500) {
+                snapshotFlow { programWindow.programs.isNotEmpty() }
+                    .filter { it }
+                    .first()
+            }
+            if (programWindow.programs.isEmpty()) {
+                pendingFocusToPrograms = false
+                return@LaunchedEffect
+            }
         }
 
+        withFrameNanos { }
+
+        runCatching { programListState.scrollToItem((programWindow.focusIndex - 3).coerceAtLeast(0)) }
         withFrameNanos { }
 
         if (runCatching { selectedProgramRequester.requestFocus() }.isSuccess) {
@@ -369,11 +484,7 @@ fun PlayerDrawer(
             return@LaunchedEffect
         }
 
-        runCatching {
-            if (programListState.layoutInfo.visibleItemsInfo.none { it.index == programWindow.focusIndex }) {
-                programListState.scrollToItem(programWindow.focusIndex)
-            }
-        }
+        runCatching { programListState.scrollToItem((programWindow.focusIndex - 3).coerceAtLeast(0)) }
 
         repeat(3) {
             withFrameNanos { }
@@ -386,11 +497,11 @@ fun PlayerDrawer(
         pendingFocusToPrograms = false
     }
 
-    LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate, programWindow) {
+    LaunchedEffect(visible, focusedChannelUrl, selectedEpgDate, programWindow.focusIndex, programWindow.programs.size) {
         if (!visible) return@LaunchedEffect
         if (programWindow.programs.isEmpty()) return@LaunchedEffect
-        // if (activeColumn != DrawerColumn.Programs && activeColumn != DrawerColumn.Dates) return@LaunchedEffect
-        centerLazyListItem(programListState, programWindow.focusIndex)
+        if (activeColumn != DrawerColumn.Programs && activeColumn != DrawerColumn.Dates) return@LaunchedEffect
+        programListState.scrollToItem((programWindow.focusIndex - 3).coerceAtLeast(0))
     }
 
     LaunchedEffect(pendingFocusToDates, visible, epgDates.size, dateFocusTargetIndex) {
@@ -422,31 +533,37 @@ fun PlayerDrawer(
         pendingFocusToDates = false
     }
 
-    AnimatedVisibility(
-        visible = visible,
-        enter = slideInHorizontally(animationSpec = tween(160), initialOffsetX = { -it }),
-        exit = slideOutHorizontally(animationSpec = tween(140), targetOffsetX = { -it }),
-        modifier = modifier.fillMaxSize()
-    ) {
-        val datesVisible = showDates && epgDates.isNotEmpty()
-        val targetDrawerWidth = remember(showGroups, datesVisible) {
-            val groupsSection = if (showGroups) (150.dp + 32.dp + 1.dp) else 0.dp
-            val channelsSection = 300.dp + 32.dp
-            val divider = 1.dp
-            val programsSection = 300.dp + 32.dp + (if (datesVisible) (110.dp + 10.dp) else 0.dp)
-            groupsSection + channelsSection + divider + programsSection
-        }
-        val drawerWidth by animateDpAsState(
-            targetValue = targetDrawerWidth,
-            animationSpec = spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessHigh
-            ),
-            label = "drawerWidth"
-        )
+    val datesVisible = showDates && epgDates.isNotEmpty()
+    val targetDrawerWidth = remember(showGroups, datesVisible) {
+        val groupsSection = if (showGroups) (150.dp + 32.dp + 1.dp) else 0.dp
+        val channelsSection = 300.dp + 32.dp
+        val divider = 1.dp
+        val programsSection = 300.dp + 32.dp + (if (datesVisible) (110.dp + 10.dp) else 0.dp)
+        groupsSection + channelsSection + divider + programsSection
+    }
+    val drawerWidth by animateDpAsState(
+        targetValue = targetDrawerWidth,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessHigh
+        ),
+        label = "drawerWidth"
+    )
+    val drawerOffsetX by animateDpAsState(
+        targetValue = if (visible) 0.dp else -drawerWidth,
+        animationSpec = tween(if (visible) 160 else 140),
+        label = "drawerOffsetX"
+    )
 
-        Box(
-            modifier = Modifier
+    val channelCount = channels.size
+    val focusedIndex = remember(channelIndexByUrl, focusedChannelUrl) {
+        val url = focusedChannelUrl
+        if (url.isNullOrBlank()) null else channelIndexByUrl[url]
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        val overlayModifier = if (visible) {
+            Modifier
                 .fillMaxSize()
                 .background(scrim)
                 .onPreviewKeyEvent {
@@ -455,8 +572,8 @@ fun PlayerDrawer(
                     if (it.key == Key.Back) {
                         onClose()
                         true
-                    } else if (it.key == Key.DirectionUp && activeColumn == DrawerColumn.Channels && channels.isNotEmpty()) {
-                        val index = channels.indexOfFirst { c -> c.url == focusedChannelUrl }
+                    } else if (it.key == Key.DirectionUp && activeColumn == DrawerColumn.Channels && channelCount > 0) {
+                        val index = focusedIndex
                         if (index == 0) {
                             focusedChannelUrl = channels.last().url
                             pendingFocusToChannels = true
@@ -464,9 +581,9 @@ fun PlayerDrawer(
                         } else {
                             false
                         }
-                    } else if (it.key == Key.DirectionDown && activeColumn == DrawerColumn.Channels && channels.isNotEmpty()) {
-                        val index = channels.indexOfFirst { c -> c.url == focusedChannelUrl }
-                        if (index == channels.lastIndex) {
+                    } else if (it.key == Key.DirectionDown && activeColumn == DrawerColumn.Channels && channelCount > 0) {
+                        val index = focusedIndex
+                        if (index == channelCount - 1) {
                             focusedChannelUrl = channels.first().url
                             pendingFocusToChannels = true
                             true
@@ -497,12 +614,18 @@ fun PlayerDrawer(
                         false
                     }
                 }
-        ) {
+        } else {
+            Modifier.fillMaxSize()
+        }
+
+        Box(modifier = overlayModifier) {
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(drawerWidth)
+                    .offset(x = drawerOffsetX)
                     .background(container, shape)
+                    .focusProperties { canFocus = visible }
                     .padding(0.dp)
             ) {
                 Row(modifier = Modifier.fillMaxHeight()) {
@@ -598,6 +721,7 @@ fun PlayerDrawer(
                         val programs = programWindow.programs
                         val dates = epgDates
                         val selectedDate = selectedEpgDate
+                        val isEpgLoading = visible && programsEnabled && epgData != null && epgDataChannel != null && epgChannelData == null
 
                         Row(modifier = Modifier.fillMaxSize()) {
                             if (programs.isEmpty()) {
@@ -608,7 +732,7 @@ fun PlayerDrawer(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "暂无节目单",
+                                        text = if (isEpgLoading) "加载中" else "暂无节目单",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                     )
@@ -1019,6 +1143,30 @@ private fun indexOfProgramAt(programs: List<EpgProgram>, nowMillis: Long): Int {
     return lo.coerceIn(0, programs.lastIndex)
 }
 
+private fun lowerBoundStartMillis(programs: List<EpgProgram>, value: Long): Int {
+    var lo = 0
+    var hi = programs.size
+    while (lo < hi) {
+        val mid = (lo + hi) ushr 1
+        if (programs[mid].startMillis < value) {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+private fun sliceProgramsOverlapping(programs: List<EpgProgram>, rangeStart: Long, rangeEnd: Long): List<EpgProgram> {
+    if (programs.isEmpty()) return emptyList()
+    val endIndex = lowerBoundStartMillis(programs, rangeEnd)
+    var startIndex = (lowerBoundStartMillis(programs, rangeStart) - 1).coerceAtLeast(0)
+    if (startIndex > endIndex) startIndex = endIndex
+    if (startIndex == endIndex) return emptyList()
+    val slice = programs.subList(startIndex, endIndex)
+    return slice.filter { it.endMillis > rangeStart }
+}
+
 private fun formatEpgTimeRange(startMillis: Long, endMillis: Long, zone: ZoneId): String {
     val start = Instant.ofEpochMilli(startMillis).atZone(zone).toLocalTime()
     val end = Instant.ofEpochMilli(endMillis).atZone(zone).toLocalTime()
@@ -1029,32 +1177,4 @@ private fun millisToLocalDate(millis: Long, zone: ZoneId): LocalDate {
     return Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
 }
 
-private suspend fun centerLazyListItem(state: LazyListState, index: Int) {
-    withFrameNanos { }
 
-    suspend fun centerIfVisible(): Boolean {
-        val layoutInfo = state.layoutInfo
-        val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return false
-        val viewportSize = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-        val viewportCenter = layoutInfo.viewportStartOffset + (viewportSize / 2)
-        val itemCenter = item.offset + (item.size / 2)
-        val delta = itemCenter - viewportCenter
-        if (kotlin.math.abs(delta) <= 2) return true
-        val desiredStartOffset = ((viewportSize / 2) - (item.size / 2)).coerceAtLeast(0)
-        try {
-            state.scrollToItem(index, scrollOffset = -desiredStartOffset)
-        } catch (_: Throwable) {
-        }
-        return true
-    }
-
-    if (centerIfVisible()) return
-
-    try {
-        state.scrollToItem(index)
-    } catch (_: Throwable) {
-    }
-
-    withFrameNanos { }
-    centerIfVisible()
-}

@@ -1,6 +1,7 @@
 package com.cjlhll.iptv
 
 import java.io.Serializable
+import java.util.concurrent.ConcurrentHashMap
 
 data class EpgProgram(
     val channelId: String,
@@ -14,7 +15,29 @@ data class EpgData(
     val programsByChannelId: Map<String, List<EpgProgram>>,
     val normalizedDisplayNameToChannelId: Map<String, String>
 ) : Serializable {
+    @Transient
+    private var resolvedChannelIdCache: ConcurrentHashMap<String, String>? = null
+
+    private fun channelIdCache(): ConcurrentHashMap<String, String> {
+        val existing = resolvedChannelIdCache
+        if (existing != null) return existing
+        val created = ConcurrentHashMap<String, String>()
+        resolvedChannelIdCache = created
+        return created
+    }
+
     fun resolveChannelId(channel: Channel): String? {
+        val key = channel.url
+        val cache = channelIdCache()
+        val cached = cache[key]
+        if (cached != null) return if (cached == NOT_FOUND) null else cached
+
+        val resolved = resolveChannelIdUncached(channel)
+        cache[key] = resolved ?: NOT_FOUND
+        return resolved
+    }
+
+    private fun resolveChannelIdUncached(channel: Channel): String? {
         val tvgId = channel.tvgId?.trim().orEmpty()
         if (tvgId.isNotEmpty()) {
             if (programsByChannelId.containsKey(tvgId)) return tvgId
@@ -103,6 +126,10 @@ data class EpgData(
             }
         }
         return null
+    }
+
+    companion object {
+        private const val NOT_FOUND = "\u0000"
     }
 }
 
