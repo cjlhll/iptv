@@ -17,6 +17,23 @@ object EpgCache {
         return "epg_$hex.xmltv"
     }
 
+    fun getFile(context: Context, fileName: String): File? {
+        val file = File(context.filesDir, fileName)
+        return if (file.exists()) file else null
+    }
+
+    fun writeStream(context: Context, fileName: String, inputStream: java.io.InputStream): File? {
+        val file = File(context.filesDir, fileName)
+        try {
+            file.outputStream().use { output ->
+                inputStream.copyTo(output)
+            }
+            return file
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
     fun writeBytes(context: Context, fileName: String, content: ByteArray): File {
         val file = File(context.filesDir, fileName)
         file.writeBytes(content)

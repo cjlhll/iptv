@@ -15,6 +15,10 @@ object XmlTvParser {
     private val XMLTV_DIGITS: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyyMMddHHmmss", Locale.US)
 
+    private val REGEX_OFFSET_4 = Regex("[+-]\\d{4}")
+    private val REGEX_OFFSET_COLON = Regex("[+-]\\d{2}:\\d{2}")
+    private val REGEX_OFFSET_2 = Regex("[+-]\\d{2}")
+
     private data class ParsedXmlTvTime(
         val instant: Instant,
         val offset: ZoneOffset?
@@ -138,38 +142,57 @@ object XmlTvParser {
         if (raw.isNullOrBlank()) return null
         val s = raw.trim()
 
-        runCatching { Instant.parse(s) }.getOrNull()?.let { return ParsedXmlTvTime(it, ZoneOffset.UTC) }
-        runCatching {
-            val odt = OffsetDateTime.parse(s)
-            ParsedXmlTvTime(odt.toInstant(), odt.offset)
-        }.getOrNull()?.let { return it }
+        // 1. Try standard XMLTV format first (yyyyMMddHHmmss +HHmm) - Most common
+        // Fast check: starts with digit and length >= 14
+        if (s.isNotEmpty() && s[0].isDigit()) {
+            val digitsEnd = s.indexOfFirst { !it.isDigit() }
+            val digitsLen = if (digitsEnd == -1) s.length else digitsEnd
+            
+            if (digitsLen >= 12) {
+                val fullDigits = if (digitsLen >= 14) s.substring(0, 14) else s.substring(0, 12) + "00"
+                
+                try {
+                    val ldt = LocalDateTime.parse(fullDigits, XMLTV_DIGITS)
+                    
+                    val rest = if (digitsEnd == -1) "" else s.substring(digitsEnd).trim()
+                    val offset: ZoneOffset? = when {
+                        rest.isEmpty() -> null
+                        rest.startsWith("Z", ignoreCase = true) -> ZoneOffset.UTC
+                        rest.startsWith("+") || rest.startsWith("-") -> {
+                            val token = rest.takeWhile { !it.isWhitespace() }
+                            when {
+                                token.matches(REGEX_OFFSET_4) -> try { ZoneOffset.of(token) } catch (_: Exception) { null }
+                                token.matches(REGEX_OFFSET_COLON) -> try { ZoneOffset.of(token) } catch (_: Exception) { null }
+                                token.matches(REGEX_OFFSET_2) -> try { ZoneOffset.of("${token}:00") } catch (_: Exception) { null }
+                                else -> null
+                            }
+                        }
+                        else -> null
+                    }
 
-        val digits = s.takeWhile { it.isDigit() }
-        if (digits.length < 12) return null
-        val fullDigits = if (digits.length >= 14) digits.substring(0, 14) else digits.substring(0, 12) + "00"
-        val ldt = runCatching { LocalDateTime.parse(fullDigits, XMLTV_DIGITS) }.getOrNull() ?: return null
-
-        val rest = s.substring(digits.length).trim()
-        val offset: ZoneOffset? = when {
-            rest.isEmpty() -> null
-            rest.startsWith("Z", ignoreCase = true) -> ZoneOffset.UTC
-            rest.startsWith("+") || rest.startsWith("-") -> {
-                val token = rest.takeWhile { !it.isWhitespace() }
-                when {
-                    token.matches(Regex("[+-]\\d{4}")) -> runCatching { ZoneOffset.of(token) }.getOrNull()
-                    token.matches(Regex("[+-]\\d{2}:\\d{2}")) -> runCatching { ZoneOffset.of(token) }.getOrNull()
-                    token.matches(Regex("[+-]\\d{2}")) -> runCatching { ZoneOffset.of("${token}:00") }.getOrNull()
-                    else -> null
+                    return if (offset != null) {
+                        ParsedXmlTvTime(ldt.atOffset(offset).toInstant(), offset)
+                    } else {
+                        ParsedXmlTvTime(ldt.atZone(ZoneId.systemDefault()).toInstant(), null)
+                    }
+                } catch (_: Exception) {
+                    // Fallthrough to other formats if parsing fails
                 }
             }
-            else -> null
         }
 
-        return if (offset != null) {
-            ParsedXmlTvTime(ldt.atOffset(offset).toInstant(), offset)
-        } else {
-            ParsedXmlTvTime(ldt.atZone(ZoneId.systemDefault()).toInstant(), null)
-        }
+        // 2. Try ISO-8601 (Instant)
+        try {
+            return ParsedXmlTvTime(Instant.parse(s), ZoneOffset.UTC)
+        } catch (_: Exception) {}
+
+        // 3. Try ISO-8601 (OffsetDateTime)
+        try {
+            val odt = OffsetDateTime.parse(s)
+            return ParsedXmlTvTime(odt.toInstant(), odt.offset)
+        } catch (_: Exception) {}
+
+        return null
     }
 }
 

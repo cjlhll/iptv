@@ -1,17 +1,19 @@
 package com.cjlhll.iptv
 
+import java.io.Serializable
+
 data class EpgProgram(
     val channelId: String,
     val startMillis: Long,
     val endMillis: Long,
     val title: String,
     val sourceOffsetSeconds: Int?
-)
+) : Serializable
 
 data class EpgData(
     val programsByChannelId: Map<String, List<EpgProgram>>,
     val normalizedDisplayNameToChannelId: Map<String, String>
-) {
+) : Serializable {
     fun resolveChannelId(channel: Channel): String? {
         val tvgId = channel.tvgId?.trim().orEmpty()
         if (tvgId.isNotEmpty()) {

@@ -465,8 +465,17 @@ fun VideoPlayerScreen(
             }
 
             // 2. Loop for Network Updates (EPG Only)
+            var lastAttemptTime = 0L
             while (true) {
                 val now = System.currentTimeMillis()
+                
+                // Throttle retries: if we tried recently (within 5 mins) and failed, don't try again immediately
+                // unless it's a manual refresh
+                if (!shouldRefreshEpg.value && (now - lastAttemptTime < 5 * 60 * 1000L)) {
+                    delay(10_000L)
+                    continue
+                }
+
                 val lastEpgUpdate = Prefs.getLastEpgUpdateTime(context)
                 val zone = ZoneId.systemDefault()
                 val lastDate = Instant.ofEpochMilli(lastEpgUpdate).atZone(zone).toLocalDate()
@@ -476,6 +485,7 @@ fun VideoPlayerScreen(
                 val isOver6Hours = (now - lastEpgUpdate) > 6 * 3600 * 1000L
 
                 if (shouldRefreshEpg.value || isDifferentDay || isOver6Hours) {
+                    lastAttemptTime = now
                     val newEpg = EpgRepository.load(context, epgSource, forceRefresh = true)
                     if (newEpg != null) {
                         epgData = newEpg
@@ -490,10 +500,12 @@ fun VideoPlayerScreen(
                                 android.widget.Toast.makeText(context, "EPG更新成功", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
+                    } else {
+                        Log.w(epgLoadTag, "network refresh failed")
                     }
                     shouldRefreshEpg.value = false
                 }
-                delay(10_000L)
+                delay(600_000L) // Check every 10 minutes
             }
         }
     }
@@ -746,12 +758,36 @@ fun VideoPlayerScreen(
                     )
                 }
 
+                val displayChannel = if (req != null) {
+                    channels.firstOrNull { it.url == req.liveUrl }
+                } else {
+                    channels.getOrNull(currentIndex)
+                }
+
+                val displayTitle = if (req != null) {
+                    req.programTitle
+                } else {
+                    displayChannel?.let { nowProgramByUrl[it.url]?.title }
+                }
+
+                val displayProgress = if (req != null) {
+                    null
+                } else {
+                    displayChannel?.let { nowProgramByUrl[it.url]?.progress }
+                }
+
+                val displayNumber = if (req != null) {
+                    if (displayChannel != null) channels.indexOf(displayChannel) + 1 else 0
+                } else {
+                    currentIndex + 1
+                }
+
                 ChannelInfoBanner(
                     visible = infoBannerOpen,
-                    channel = channels.getOrNull(currentIndex),
-                    programTitle = nowProgramByUrl[channels.getOrNull(currentIndex)?.url]?.title,
-                    programProgress = nowProgramByUrl[channels.getOrNull(currentIndex)?.url]?.progress,
-                    channelNumber = currentIndex + 1,
+                    channel = displayChannel,
+                    programTitle = displayTitle,
+                    programProgress = displayProgress,
+                    channelNumber = displayNumber,
                     videoFormat = videoFormat,
                     roundedTopCorners = (req == null),
                     animate = false,
