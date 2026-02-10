@@ -14,6 +14,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -23,8 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.viewinterop.AndroidView
@@ -274,7 +276,7 @@ fun VideoPlayerScreen(
     var nowProgramByUrl by remember { mutableStateOf<Map<String, NowProgramUi>>(emptyMap()) }
     var catchupRequest by remember { mutableStateOf<CatchupPlayRequest?>(null) }
     var catchupPositionMs by remember { mutableStateOf(0L) }
-    var isCatchupProgressVisible by remember { mutableStateOf(false) }
+    var isSeekOverlayVisible by remember { mutableStateOf(false) }
     var catchupSeekPingAt by remember { mutableStateOf(0L) }
 
     val drawerLogoWidthPx = remember(density) { with(density) { 64.dp.roundToPx() } }
@@ -443,28 +445,11 @@ fun VideoPlayerScreen(
         onCatchupPlaybackChanged(catchupRequest != null)
     }
 
-    LaunchedEffect(infoBannerOpen, catchupSeekPingAt, catchupRequest) {
-        val req = catchupRequest
-        if (req == null) {
-            isCatchupProgressVisible = false
-            return@LaunchedEffect
-        }
-
-        if (infoBannerOpen) {
-            isCatchupProgressVisible = true
-            return@LaunchedEffect
-        }
-
-        if (catchupSeekPingAt == 0L) {
-            isCatchupProgressVisible = false
-            return@LaunchedEffect
-        }
-
-        isCatchupProgressVisible = true
-        val token = catchupSeekPingAt
-        delay(1500)
-        if (!infoBannerOpen && catchupSeekPingAt == token) {
-            isCatchupProgressVisible = false
+    LaunchedEffect(catchupSeekPingAt) {
+        if (catchupSeekPingAt > 0) {
+            isSeekOverlayVisible = true
+            delay(1500)
+            isSeekOverlayVisible = false
         }
     }
 
@@ -795,12 +780,8 @@ fun VideoPlayerScreen(
         )
 
         val req = catchupRequest
-        val bottomOverlayVisible = infoBannerOpen || (req != null && isCatchupProgressVisible)
 
-        AnimatedVisibility(
-            visible = bottomOverlayVisible,
-            enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it }),
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -809,14 +790,13 @@ fun VideoPlayerScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.Bottom
             ) {
-                if (req != null && isCatchupProgressVisible) {
-                    CatchupProgressBar(
+                val catchupConfig = if (req != null) {
+                    CatchupConfiguration(
                         startMillis = req.startMillis,
                         endMillis = req.endMillis,
-                        positionMs = catchupPositionMs,
-                        modifier = Modifier.fillMaxWidth()
+                        positionMs = catchupPositionMs
                     )
-                }
+                } else null
 
                 val displayChannel = if (req != null) {
                     channels.firstOrNull { it.url == req.liveUrl }
@@ -825,7 +805,7 @@ fun VideoPlayerScreen(
                 }
 
                 val displayTitle = if (req != null) {
-                    req.programTitle
+                    "${req.programTitle} (回看中)"
                 } else {
                     displayChannel?.let { nowProgramByUrl[it.url]?.title }
                 }
@@ -843,14 +823,14 @@ fun VideoPlayerScreen(
                 }
 
                 ChannelInfoBanner(
-                    visible = infoBannerOpen,
+                    visible = infoBannerOpen || isSeekOverlayVisible,
                     channel = displayChannel,
                     programTitle = displayTitle,
                     programProgress = displayProgress,
                     channelNumber = displayNumber,
                     videoFormat = videoFormat,
-                    roundedTopCorners = (req == null),
-                    animate = false,
+                    catchupConfiguration = catchupConfig,
+                    animate = true,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -890,7 +870,8 @@ private fun CatchupProgressBar(
     startMillis: Long,
     endMillis: Long,
     positionMs: Long,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isBottomPaddingNeeded: Boolean = false
 ) {
     val total = (endMillis - startMillis).coerceAtLeast(1L)
     val progress = (positionMs.toFloat() / total.toFloat()).coerceIn(0f, 1f)
@@ -898,24 +879,21 @@ private fun CatchupProgressBar(
     val startText = catchupTimeFormatter.format(Instant.ofEpochMilli(startMillis).atZone(zone))
     val endText = catchupTimeFormatter.format(Instant.ofEpochMilli(endMillis).atZone(zone))
 
-    val scrimBrush = Brush.verticalGradient(
-        0f to MaterialTheme.colorScheme.surface.copy(alpha = 0.0f),
-        0.45f to MaterialTheme.colorScheme.surface.copy(alpha = 0.14f),
-        1f to MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-    )
+    val containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+    val shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    val bottomPadding = if (isBottomPaddingNeeded) 20.dp else 4.dp
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(96.dp)
-            .background(scrimBrush)
+            .background(containerColor, shape)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 32.dp, vertical = 14.dp)
+                .padding(start = 32.dp, end = 32.dp, top = 20.dp, bottom = bottomPadding)
         ) {
             androidx.tv.material3.Text(
                 text = startText,
@@ -925,14 +903,38 @@ private fun CatchupProgressBar(
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            LinearProgressIndicator(
-                progress = { progress },
+            Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(6.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
-            )
+                    .height(12.dp)
+            ) {
+                // Track
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .align(Alignment.Center)
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f), RoundedCornerShape(2.dp))
+                )
+                
+                // Progress Fill
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .height(4.dp)
+                        .align(Alignment.CenterStart)
+                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp))
+                )
+
+                // Dot
+                val bias = if (progress.isNaN()) -1f else (progress * 2) - 1
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .align(BiasAlignment(bias.coerceIn(-1f, 1f), 0f))
+                        .background(ComposeColor.White, CircleShape)
+                )
+            }
 
             Spacer(modifier = Modifier.width(16.dp))
 
