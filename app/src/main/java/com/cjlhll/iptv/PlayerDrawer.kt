@@ -154,8 +154,6 @@ fun PlayerDrawer(
 
     val visibleValue by rememberUpdatedState(visible)
 
-    var programsEnabled by remember { mutableStateOf(false) }
-
     var autoProgramScrollKey by remember { mutableStateOf<String?>(null) }
 
     val epgChannelUiCache = remember(epgData) {
@@ -184,9 +182,6 @@ fun PlayerDrawer(
 
     LaunchedEffect(visible) {
         if (!visible) return@LaunchedEffect
-        if (programsEnabled) return@LaunchedEffect
-        delay(180)
-        programsEnabled = true
         autoProgramScrollKey = null
     }
 
@@ -345,10 +340,8 @@ fun PlayerDrawer(
     val epgChannelData by produceState<EpgChannelUiData?>(
         initialValue = epgDataChannel?.url?.let { epgChannelUiCache[it] },
         key1 = epgData,
-        key2 = epgDataChannel,
-        key3 = programsEnabled
+        key2 = epgDataChannel
     ) {
-        if (!programsEnabled) return@produceState
         val data = epgData
         val ch = epgDataChannel
         if (data == null || ch == null) {
@@ -721,7 +714,7 @@ fun PlayerDrawer(
                         val programs = programWindow.programs
                         val dates = epgDates
                         val selectedDate = selectedEpgDate
-                        val isEpgLoading = visible && programsEnabled && epgData != null && epgDataChannel != null && epgChannelData == null
+                        val isEpgLoading = visible && epgData != null && epgDataChannel != null && epgChannelData == null
 
                         Row(modifier = Modifier.fillMaxSize()) {
                             if (programs.isEmpty()) {

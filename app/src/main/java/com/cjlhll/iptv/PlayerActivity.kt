@@ -293,15 +293,6 @@ fun VideoPlayerScreen(
         heavyWorkEnabled = true
     }
 
-    LaunchedEffect(drawerOpen) {
-        if (drawerOpen && !firstDrawerOpenSeen) {
-            firstDrawerOpenSeen = true
-            heavyWorkEnabled = false
-            delay(900)
-            heavyWorkEnabled = true
-        }
-    }
-
     fun initializePlayer() {
         if (player != null) return
         
@@ -579,7 +570,6 @@ fun VideoPlayerScreen(
     }
 
     LaunchedEffect(Unit) {
-        while (!heavyWorkEnabled) delay(200)
         val epgSource = Prefs.getEpgSource(context)
         if (epgSource.isNotBlank()) {
             val cachedEpg = EpgRepository.load(context, epgSource, forceRefresh = false)
@@ -648,8 +638,7 @@ fun VideoPlayerScreen(
         else channels.filter { (it.group?.takeIf { g -> g.isNotBlank() } ?: "未分组") == selectedGroup }
     }
 
-    LaunchedEffect(epgData, nowMillis, filteredChannels, heavyWorkEnabled) {
-        if (!heavyWorkEnabled) return@LaunchedEffect
+    LaunchedEffect(epgData, nowMillis, filteredChannels) {
         val data = epgData
         if (data == null || filteredChannels.isEmpty()) {
             nowProgramByUrl = emptyMap()
