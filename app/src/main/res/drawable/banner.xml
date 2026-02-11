@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <!-- 保持一个16:9的透明占位，确保Banner尺寸正确 -->
+        <shape android:shape="rectangle">
+            <size android:width="320dp" android:height="180dp"/>
+            <solid android:color="@android:color/transparent"/>
+        </shape>
+    </item>
+    <!-- 居中放置图片，不强制拉伸，保持原比例 -->
+    <item android:gravity="center">
+        <bitmap android:src="@drawable/banner_bitmap" android:gravity="center"/>
+    </item>
+</layer-list>
