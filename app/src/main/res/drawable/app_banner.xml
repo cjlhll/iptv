@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 强制定义 Banner 尺寸比例 -->
+    <item>
+        <shape android:shape="rectangle">
+            <size android:width="320dp" android:height="180dp" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+    
+    <!-- 直接引用图片资源，移除 gravity 属性以允许自动缩放填满 -->
+    <!-- 之前的 gravity="center" 会导致大图不缩放只显示中间局部 -->
+    <item android:drawable="@drawable/banner_bitmap" />
+</layer-list>
