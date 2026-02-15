@@ -100,6 +100,17 @@ private data class EpgChannelUiData(
     val dates: List<LocalDate>
 )
 
+private sealed interface ChannelListStateKey {
+    data object Visible : ChannelListStateKey
+
+    data class Hidden(
+        val selectedChannelUrl: String?,
+        val channelsSize: Int,
+        val firstUrl: String?,
+        val lastUrl: String?
+    ) : ChannelListStateKey
+}
+
 private val epgTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private val epgDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")
 
@@ -218,8 +229,21 @@ fun PlayerDrawer(
         if (!url.isNullOrBlank()) channelIndexByUrl[url] ?: 0 else 0
     }
 
-    val channelListState = remember(channels, initialChannelIndex) {
-        LazyListState(firstVisibleItemIndex = initialChannelIndex.coerceAtLeast(0))
+    val channelListStateKey = remember(visible, selectedChannelUrl, channels) {
+        if (visible) {
+            ChannelListStateKey.Visible
+        } else {
+            ChannelListStateKey.Hidden(
+                selectedChannelUrl = selectedChannelUrl,
+                channelsSize = channels.size,
+                firstUrl = channels.firstOrNull()?.url,
+                lastUrl = channels.lastOrNull()?.url
+            )
+        }
+    }
+
+    val channelListState = remember(channelListStateKey) {
+        LazyListState(firstVisibleItemIndex = initialScrollIndex.coerceAtLeast(0))
     }
 
     val programListState = rememberLazyListState()
@@ -236,8 +260,11 @@ fun PlayerDrawer(
             stableFocusedChannelUrl = targetUrl
 
             if (channels.isNotEmpty()) {
+                val targetIndex = targetUrl?.let { channelIndexByUrl[it] } ?: 0
                 runCatching {
-                    snapshotFlow { channelListState.layoutInfo.visibleItemsInfo.isNotEmpty() }
+                    snapshotFlow {
+                        channelListState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
+                    }
                         .filter { it }
                         .first()
                 }
@@ -263,11 +290,11 @@ fun PlayerDrawer(
     }
 
     LaunchedEffect(selectedGroup) {
+        if (!visible) return@LaunchedEffect
+        if (!showGroups) return@LaunchedEffect
         if (channels.isEmpty()) return@LaunchedEffect
-        if (visible) {
-             runCatching {
-                channelListState.scrollToItem(0)
-            }
+        runCatching {
+            channelListState.scrollToItem(0)
         }
     }
 
