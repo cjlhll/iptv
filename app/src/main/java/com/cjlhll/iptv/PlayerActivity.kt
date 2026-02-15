@@ -745,7 +745,6 @@ fun VideoPlayerScreen(
             groups = groups,
             selectedGroup = selectedGroup,
             channels = filteredChannels,
-            initialChannelIndex = filteredChannels.indexOfFirst { it.url == channels.getOrNull(currentIndex)?.url }.let { if (it >= 0) it else 0 },
             selectedChannelUrl = channels.getOrNull(currentIndex)?.url,
             nowProgramByChannelUrl = nowProgramByUrl,
             epgData = epgData,

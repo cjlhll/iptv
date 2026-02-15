@@ -131,7 +131,6 @@ fun PlayerDrawer(
     groups: List<String>,
     selectedGroup: String,
     channels: List<Channel>,
-    initialChannelIndex: Int = 0,
     selectedChannelUrl: String?,
     nowProgramByChannelUrl: Map<String, NowProgramUi> = emptyMap(),
     epgData: EpgData? = null,

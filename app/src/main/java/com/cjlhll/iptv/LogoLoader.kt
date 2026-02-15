@@ -31,6 +31,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
@@ -49,6 +50,14 @@ object LogoLoader {
     private val semaphore = kotlinx.coroutines.sync.Semaphore(3) // 限制并发数，防止UI卡顿
 
     private val inFlight = HashSet<String>()
+
+    private val hexChars = charArrayOf(
+        '0', '1', '2', '3', '4', '5', '6', '7',
+        '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
+    )
+
+    @Volatile
+    private var diskCacheDir: File? = null
 
     private val cache = object : LinkedHashMap<String, ImageBitmap>(MAX_ENTRIES, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>): Boolean {
@@ -72,8 +81,7 @@ object LogoLoader {
 
     fun getInMemory(url: String, targetWidthPx: Int, targetHeightPx: Int): ImageBitmap? {
         if (url.isBlank()) return null
-        val key = cacheKey(url, targetWidthPx, targetHeightPx)
-        return getCached(key)
+        return getCached(memoryKey(url, targetWidthPx, targetHeightPx))
     }
 
     private fun putCached(key: String, bitmap: ImageBitmap) {
@@ -81,17 +89,23 @@ object LogoLoader {
     }
 
     private fun cacheDir(context: Context): File {
-        val dir = File(context.cacheDir, "logo_cache_v1")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
+        val cached = diskCacheDir
+        if (cached != null) return cached
+        return synchronized(this) {
+            diskCacheDir ?: File(context.cacheDir, "logo_cache_v1").also { diskCacheDir = it }
+        }
     }
 
-    private fun cacheKey(url: String, targetWidthPx: Int, targetHeightPx: Int): String {
-        return "${sha256(url)}_${targetWidthPx}x${targetHeightPx}"
+    private fun memoryKey(url: String, targetWidthPx: Int, targetHeightPx: Int): String {
+        return "${targetWidthPx}x${targetHeightPx}|$url"
     }
 
-    private fun cacheFile(context: Context, key: String): File {
-        return File(cacheDir(context), "$key.webp")
+    private fun diskKey(url: String, targetWidthPx: Int, targetHeightPx: Int): String {
+        return "${sha256Hex(url)}_${targetWidthPx}x${targetHeightPx}"
+    }
+
+    private fun cacheFile(dir: File, diskKey: String): File {
+        return File(dir, "$diskKey.webp")
     }
 
     private fun tryMarkInFlight(key: String): Boolean {
@@ -107,11 +121,16 @@ object LogoLoader {
         synchronized(inFlight) { inFlight.remove(key) }
     }
 
-    private fun sha256(value: String): String {
+    private fun sha256Hex(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        val sb = StringBuilder(digest.size * 2)
-        for (b in digest) sb.append(String.format("%02x", b))
-        return sb.toString()
+        val out = CharArray(digest.size * 2)
+        var i = 0
+        for (b in digest) {
+            val v = b.toInt() and 0xFF
+            out[i++] = hexChars[v ushr 4]
+            out[i++] = hexChars[v and 0x0F]
+        }
+        return String(out)
     }
 
     private fun computeSampleSize(outWidth: Int, outHeight: Int, targetWidthPx: Int, targetHeightPx: Int): Int {
@@ -159,11 +178,19 @@ object LogoLoader {
         if (url.isBlank()) return null
         if (targetWidthPx <= 0 || targetHeightPx <= 0) return null
 
-        val key = cacheKey(url, targetWidthPx, targetHeightPx)
-        getCached(key)?.let { return it }
+        val memoryKey = memoryKey(url, targetWidthPx, targetHeightPx)
+        getCached(memoryKey)?.let { return it }
 
-        val diskFile = cacheFile(context, key)
-        if (diskFile.exists()) {
+        val diskKey = withContext(Dispatchers.Default) { diskKey(url, targetWidthPx, targetHeightPx) }
+
+        val (diskFile, diskExists) = withContext(Dispatchers.IO) {
+            val dir = cacheDir(context)
+            if (!dir.exists()) dir.mkdirs()
+            val file = cacheFile(dir, diskKey)
+            file to file.exists()
+        }
+
+        if (diskExists) {
             val bitmap = withContext(Dispatchers.Default) {
                 try {
                     BitmapFactory.decodeFile(diskFile.absolutePath)
@@ -173,15 +200,17 @@ object LogoLoader {
             }
             if (bitmap != null) {
                 val imageBitmap = bitmap.asImageBitmap()
-                putCached(key, imageBitmap)
+                putCached(memoryKey, imageBitmap)
                 return imageBitmap
             }
         }
 
         return semaphore.withPermit {
             // Double check
-            getCached(key)?.let { return@withPermit it }
-            if (diskFile.exists()) {
+            getCached(memoryKey)?.let { return@withPermit it }
+
+            val diskExists2 = withContext(Dispatchers.IO) { diskFile.exists() }
+            if (diskExists2) {
                 val bitmap = withContext(Dispatchers.Default) {
                     try {
                         BitmapFactory.decodeFile(diskFile.absolutePath)
@@ -191,7 +220,7 @@ object LogoLoader {
                 }
                 if (bitmap != null) {
                     val imageBitmap = bitmap.asImageBitmap()
-                    putCached(key, imageBitmap)
+                    putCached(memoryKey, imageBitmap)
                     return@withPermit imageBitmap
                 }
             }
@@ -230,7 +259,7 @@ object LogoLoader {
                 }
 
                 val imageBitmap = bitmap.asImageBitmap()
-                putCached(key, imageBitmap)
+                putCached(memoryKey, imageBitmap)
                 imageBitmap
             } catch (e: Exception) {
                 null
@@ -250,15 +279,20 @@ object LogoLoader {
             for (raw in urls) {
                 val url = raw.trim()
                 if (url.isBlank()) continue
-                val key = cacheKey(url, targetWidthPx, targetHeightPx)
-                if (getCached(key) != null) continue
-                val diskFile = cacheFile(context, key)
-                if (diskFile.exists()) continue
-                if (!tryMarkInFlight(key)) continue
+                val memoryKey = memoryKey(url, targetWidthPx, targetHeightPx)
+                if (getCached(memoryKey) != null) continue
+                val diskKey = diskKey(url, targetWidthPx, targetHeightPx)
+                val diskExists = withContext(Dispatchers.IO) {
+                    val dir = cacheDir(context)
+                    if (!dir.exists()) dir.mkdirs()
+                    cacheFile(dir, diskKey).exists()
+                }
+                if (diskExists) continue
+                if (!tryMarkInFlight(diskKey)) continue
                 try {
                     load(context, url, targetWidthPx, targetHeightPx)
                 } finally {
-                    unmarkInFlight(key)
+                    unmarkInFlight(diskKey)
                 }
             }
         }
@@ -294,14 +328,10 @@ fun ChannelLogo(
             null
         }
     }
-    
-    var loaded by remember(url) { mutableStateOf(memoryCacheHit) }
+
+    var loaded by remember(url, sizePx) { mutableStateOf(memoryCacheHit) }
 
     var showFallbackText by remember(url) { mutableStateOf(url.isBlank()) }
-    
-    if (memoryCacheHit != null && loaded == null) {
-        loaded = memoryCacheHit
-    }
 
     LaunchedEffect(url, sizePx) {
         if (url.isBlank()) {
@@ -310,23 +340,17 @@ fun ChannelLogo(
             return@LaunchedEffect
         }
         if (sizePx.width <= 0 || sizePx.height <= 0) return@LaunchedEffect
-        
-        if (loaded != null) return@LaunchedEffect
-        
-        // Removed delay to ensure fast loading
-        loaded = LogoLoader.load(context, url, sizePx.width, sizePx.height)
-    }
 
-    LaunchedEffect(url, sizePx) {
-        if (url.isBlank()) {
-            showFallbackText = true
-            return@LaunchedEffect
-        }
         showFallbackText = false
-        delay(600)
-        if (loaded == null && url.isNotBlank()) {
-            showFallbackText = true
+        if (loaded != null) return@LaunchedEffect
+
+        val fallbackJob = launch {
+            delay(600)
+            if (loaded == null) showFallbackText = true
         }
+
+        loaded = LogoLoader.load(context, url, sizePx.width, sizePx.height)
+        if (loaded != null) fallbackJob.cancel()
     }
 
     val shape = RoundedCornerShape(10.dp)
