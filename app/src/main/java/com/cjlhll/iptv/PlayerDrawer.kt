@@ -100,17 +100,6 @@ private data class EpgChannelUiData(
     val dates: List<LocalDate>
 )
 
-private sealed interface ChannelListStateKey {
-    data object Visible : ChannelListStateKey
-
-    data class Hidden(
-        val selectedChannelUrl: String?,
-        val channelsSize: Int,
-        val firstUrl: String?,
-        val lastUrl: String?
-    ) : ChannelListStateKey
-}
-
 private val epgTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 private val epgDateFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd")
 
@@ -228,22 +217,7 @@ fun PlayerDrawer(
         if (!url.isNullOrBlank()) channelIndexByUrl[url] ?: 0 else 0
     }
 
-    val channelListStateKey = remember(visible, selectedChannelUrl, channels) {
-        if (visible) {
-            ChannelListStateKey.Visible
-        } else {
-            ChannelListStateKey.Hidden(
-                selectedChannelUrl = selectedChannelUrl,
-                channelsSize = channels.size,
-                firstUrl = channels.firstOrNull()?.url,
-                lastUrl = channels.lastOrNull()?.url
-            )
-        }
-    }
-
-    val channelListState = remember(channelListStateKey) {
-        LazyListState(firstVisibleItemIndex = initialScrollIndex.coerceAtLeast(0))
-    }
+    val channelListState = rememberLazyListState()
 
     val programListState = rememberLazyListState()
     val dateListState = rememberLazyListState()
@@ -260,31 +234,40 @@ fun PlayerDrawer(
 
             if (channels.isNotEmpty()) {
                 val targetIndex = targetUrl?.let { channelIndexByUrl[it] } ?: 0
+
                 runCatching {
-                    snapshotFlow {
-                        channelListState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
-                    }
+                    snapshotFlow { channelListState.layoutInfo.visibleItemsInfo.isNotEmpty() }
                         .filter { it }
                         .first()
                 }
 
-                repeat(2) {
-                    if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
+                val visibleItems = channelListState.layoutInfo.visibleItemsInfo
+                val selectedVisible = visibleItems.any { it.index == targetIndex }
+
+                if (selectedVisible) {
+                    focusedChannelUrl = targetUrl
+                    stableFocusedChannelUrl = targetUrl
+
                     withFrameNanos { }
+
+                    repeat(2) {
+                        if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
+                        withFrameNanos { }
+                    }
+                } else {
+                    val fallbackIndex = visibleItems.firstOrNull()?.index ?: channelListState.firstVisibleItemIndex
+                    val fallbackUrl = channels.getOrNull(fallbackIndex)?.url
+                    focusedChannelUrl = fallbackUrl
+                    stableFocusedChannelUrl = fallbackUrl
+
+                    withFrameNanos { }
+
+                    repeat(2) {
+                        if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
+                        withFrameNanos { }
+                    }
                 }
             }
-        }
-    }
-
-    LaunchedEffect(selectedChannelUrl, channels, visible) {
-        if (visible) return@LaunchedEffect
-        if (channels.isEmpty()) return@LaunchedEffect
-        val target = initialScrollIndex
-        val current = channelListState.firstVisibleItemIndex
-        if (kotlin.math.abs(current - target) <= 40) return@LaunchedEffect
-        delay(200)
-        if (!visible && channels.isNotEmpty()) {
-            runCatching { channelListState.scrollToItem(target) }
         }
     }
 
