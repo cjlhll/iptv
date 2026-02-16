@@ -224,6 +224,7 @@ fun PlayerDrawer(
 
     LaunchedEffect(visible) {
         if (!visible) {
+            delay(400)
             showGroups = false
             showDates = false
             activeColumn = DrawerColumn.Channels
@@ -231,17 +232,25 @@ fun PlayerDrawer(
             pendingFocusToChannels = false
             pendingFocusToPrograms = false
             pendingFocusToDates = false
+
+            val targetUrl = selectedChannelUrl ?: channels.firstOrNull()?.url
+            focusedChannelUrl = targetUrl
+            stableFocusedChannelUrl = targetUrl
+
+            if (targetUrl != null) {
+                val idx = channelIndexByUrl[targetUrl] ?: 0
+                runCatching { channelListState.scrollToItem(idx) }
+            }
+
             return@LaunchedEffect
         }
 
-        showGroups = false
-        showDates = false
-        activeColumn = DrawerColumn.Channels
-        // pendingFocusToChannels = true
         val targetUrl = selectedChannelUrl ?: channels.firstOrNull()?.url
-        focusedChannelUrl = targetUrl
-        stableFocusedChannelUrl = targetUrl
-
+        if (focusedChannelUrl == null) {
+            focusedChannelUrl = targetUrl
+            stableFocusedChannelUrl = targetUrl
+        }
+        
         if (channels.isNotEmpty()) {
             val targetIndex = targetUrl?.let { channelIndexByUrl[it] } ?: 0
 
@@ -251,28 +260,17 @@ fun PlayerDrawer(
                     .first()
             }
 
+            // 首次打开或列表未就位时，强制滚动到目标位置
             val visibleItems = channelListState.layoutInfo.visibleItemsInfo
-            val selectedVisible = visibleItems.any { it.index == targetIndex }
-
-            if (selectedVisible) {
-                focusedChannelUrl = targetUrl
-                stableFocusedChannelUrl = targetUrl
-
-                withFrameNanos { }
-
-                repeat(2) {
-                    if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
-                    withFrameNanos { }
-                }
-            } else {
-                val fallbackIndex = visibleItems.firstOrNull()?.index ?: channelListState.firstVisibleItemIndex
-                val fallbackUrl = channels.getOrNull(fallbackIndex)?.url
-                focusedChannelUrl = fallbackUrl
-                stableFocusedChannelUrl = fallbackUrl
-
-                withFrameNanos { }
-
-                repeat(2) {
+            val isTargetVisible = visibleItems.any { it.index == targetIndex }
+            
+            if (!isTargetVisible) {
+                runCatching { channelListState.scrollToItem(targetIndex) }
+                withFrameNanos { } 
+            }
+            
+            if (activeColumn == DrawerColumn.Channels) {
+                repeat(3) {
                     if (runCatching { selectedChannelRequester.requestFocus() }.isSuccess) return@LaunchedEffect
                     withFrameNanos { }
                 }
@@ -554,14 +552,10 @@ fun PlayerDrawer(
     }
     val drawerWidth by animateDpAsState(
         targetValue = targetDrawerWidth,
-        animationSpec = if (visible) {
-            spring(
-                dampingRatio = Spring.DampingRatioNoBouncy,
-                stiffness = Spring.StiffnessHigh
-            )
-        } else {
-            tween(durationMillis = 0)
-        },
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessHigh
+        ),
         label = "drawerWidth"
     )
     val drawerOffsetX by animateDpAsState(
